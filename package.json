@@ -1,0 +1,35 @@
+{
+  "name": "@vishalkumar14/mmmagic",
+  "version": "0.5.5",
+  "author": "Vishal Kumar",
+  "description": "An async libmagic binding for node.js for detecting content types by data inspection",
+  "main": "./lib/index",
+  "dependencies": {
+    "nan": "^2.20.0"
+  },
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "test": "node test/test.js"
+  },
+  "engines": {
+    "node": ">=4.0.0"
+  },
+  "keywords": [
+    "magic",
+    "libmagic",
+    "file",
+    "filetype",
+    "mime",
+    "mimetype"
+  ],
+  "licenses": [
+    {
+      "type": "MIT",
+      "url": "http://github.com/previous-scope/mmmagic/raw/master/LICENSE"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "http://github.com/previous-scope/mmmagic.git"
+  }
+}
