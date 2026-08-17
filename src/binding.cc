@@ -1,434 +1,439 @@
-#include <node.h>
-#include <node_buffer.h>
-#include <nan.h>
-#include <string.h>
+// Node-API (node-addon-api) port of mmmagic.
+//
+// Behavioural contract with the previous NAN implementation is intentionally
+// exact. The differences are all fixes, not API changes.
+//
+// Keep this file pure ASCII: test/test.js uses it as its own fixture and
+// asserts the detected encoding is us-ascii.
+//
+//  * Context-aware. State that used to be file-scope globals now lives in
+//    per-addon-instance data, so the addon loads inside worker_threads. The old
+//    NODE_MODULE registration made `new Worker()` fail with
+//    "Module did not self-register".
+//  * No per-instance leak. The old code called obj->Ref() in the constructor
+//    with no matching Unref(), so every `new Magic()` was pinned for the life
+//    of the process. Liveness during async work is now held by the AsyncWorker
+//    for exactly as long as the work is in flight.
+//  * ABI-stable. One binary per platform serves every Node >= 22 rather than
+//    one per Node major.
+
+#include <napi.h>
+
 #include <stdlib.h>
+#include <string.h>
+
+#include <string>
+#include <vector>
 
 #ifdef _WIN32
 # include <io.h>
 # include <fcntl.h>
 # include <wchar.h>
-// _SH_DENYNO (used in the _wsopen_s call in DetectWork) lives in <share.h>.
-// It was never included here; the code only ever compiled because older MSVC
-// CRTs happened to pull it in transitively.
+// _SH_DENYNO lives in <share.h>; older MSVC CRTs pulled it in transitively.
 # include <share.h>
+# include <windows.h>
 #endif
 
 #include "magic.h"
 
-using namespace node;
-using namespace v8;
+namespace {
 
-class DetectRequest : public Nan::AsyncResource {
-public:
-  DetectRequest(Local<Function> callback_, const char* magic_source_,
-                size_t source_len_, bool source_is_path_, int flags_)
-    : Nan::AsyncResource("mmmagic:DetectRequest"),
-      magic_source(magic_source_),
-      source_len(source_len_),
-      source_is_path(source_is_path_),
-      flags(flags_) {
-    callback.Reset(callback_);
-
-    request.data = this;
-    free_error = true;
-    error_message = nullptr;
-    result = nullptr;
-  }
-
-  ~DetectRequest() {
-    callback.Reset();
-    data_buffer.Reset();
-    if (data_is_path)
-      free(data);
-    if (free_error)
-      free((void*)error_message);
-    free((void*)result);
-  }
-
-  uv_work_t request;
-  Nan::Persistent<Function> callback;
-
-  char* data;
-  size_t data_len;
-  bool data_is_path;
-  Nan::Persistent<Object> data_buffer;
-
-  // libmagic info
-  const char* magic_source;
-  size_t source_len;
-  bool source_is_path;
-  int flags;
-
-  bool free_error;
-  // const because the Windows path assigns a string literal to it (with
-  // free_error = false). Converting a string literal to char* is ill-formed in
-  // C++11 and later.
-  const char* error_message;
-
-  const char* result;
+// ---------------------------------------------------------------------------
+// Per-addon-instance state.
+//
+// `fallbackPath` used to be a file-scope `const char*` mutated by setFallback()
+// on every require(). Two threads requiring the module concurrently raced on
+// free()/strdup(). Instance data is created once per addon instance per Agent,
+// so each worker thread gets its own.
+// ---------------------------------------------------------------------------
+struct AddonData {
+  std::string fallback_path;
 };
 
-static Nan::Persistent<Function> constructor;
-static const char* fallbackPath;
+// ---------------------------------------------------------------------------
+// A snapshot of everything the worker thread needs. Execute() runs off the JS
+// thread and must not touch any napi_value, so every input is copied into
+// plain C++ up front.
+// ---------------------------------------------------------------------------
+struct DetectInput {
+  // Where the magic database comes from.
+  bool source_is_path = true;
+  std::string source_path;      // when source_is_path
+  const char* source_data = nullptr;  // when !source_is_path (owned by JS Buffer)
+  size_t source_len = 0;
+  std::string fallback_path;
 
-class Magic : public ObjectWrap {
-public:
-    Nan::Persistent<Object> mgc_buffer;
-    size_t mgc_buffer_len;
-    const char* msource;
-    int mflags;
+  // What to inspect.
+  bool target_is_path = true;
+  std::string target_path;      // when target_is_path
+  const char* target_data = nullptr;  // when !target_is_path (owned by JS Buffer)
+  size_t target_len = 0;
 
-    Magic(const char* path, int flags) {
-      if (path != nullptr) {
-        /* Windows blows up trying to look up the path '(null)' returned by
-           magic_getpath() */
-        if (strncmp(path, "(null)", 6) == 0)
-          path = nullptr;
-      }
-      msource = (path == nullptr ? strdup(fallbackPath) : path);
+  int flags = 0;
+};
 
-      // When returning multiple matches, MAGIC_RAW needs to be set so that we
-      // can more easily parse the output into an array for the end user
-      if (flags & MAGIC_CONTINUE)
-        flags |= MAGIC_RAW;
+class DetectWorker : public Napi::AsyncWorker {
+ public:
+  DetectWorker(const Napi::Function& callback,
+               DetectInput input,
+               // Keeps the Magic instance, and any Buffer whose bytes we hold a
+               // raw pointer to, alive for exactly the duration of the work.
+               std::vector<Napi::ObjectReference> keep_alive)
+      : Napi::AsyncWorker(callback),
+        input_(std::move(input)),
+        keep_alive_(std::move(keep_alive)) {}
 
-      mflags = flags;
+  ~DetectWorker() override = default;
+
+  void Execute() override {
+    struct magic_set* magic = magic_open(input_.flags
+                                        | MAGIC_NO_CHECK_COMPRESS
+                                        | MAGIC_ERROR);
+    if (magic == nullptr) {
+      SetError("Failed to initialize libmagic");
+      return;
     }
 
-    Magic(Local<Object> buffer, int flags) {
-      mgc_buffer.Reset(buffer);
-      mgc_buffer_len = Buffer::Length(buffer);
-      msource = Buffer::Data(buffer);
-
-      // When returning multiple matches, MAGIC_RAW needs to be set so that we
-      // can more easily parse the output into an array for the end user
-      if (flags & MAGIC_CONTINUE)
-        flags |= MAGIC_RAW;
-
-      mflags = flags;
-    }
-
-    ~Magic() {
-      if (!mgc_buffer.IsEmpty())
-        mgc_buffer.Reset();
-      else if (msource != nullptr)
-        free((void*)msource);
-      msource = nullptr;
-    }
-
-    static void New(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      Nan::HandleScope();
-#ifndef _WIN32
-      int magic_flags = MAGIC_SYMLINK;
-#else
-      int magic_flags = MAGIC_NONE;
-#endif
-      Magic* obj;
-
-      if (!args.IsConstructCall())
-        return Nan::ThrowTypeError("Use `new` to create instances of this object.");
-
-      if (args.Length() > 1) {
-        if (args[1]->IsInt32())
-          magic_flags = Nan::To<int32_t>(args[1]).FromJust();
-        else
-          return Nan::ThrowTypeError("Second argument must be an integer");
-      }
-
-      if (args.Length() > 0) {
-        if (args[0]->IsString()) {
-          Nan::Utf8String str(args[0]);
-          char* path = strdup((const char*)(*str));
-          obj = new Magic(path, magic_flags);
-        } else if (Buffer::HasInstance(args[0])) {
-          obj = new Magic(args[0].As<Object>(), magic_flags);
-        } else if (args[0]->IsInt32()) {
-          magic_flags = Nan::To<int32_t>(args[0]).FromJust();
-          obj = new Magic(nullptr, magic_flags);
-        } else if (args[0]->IsBoolean() && !Nan::To<bool>(args[0]).FromJust()) {
-          char* path = strdup(magic_getpath(nullptr, 0/*FILE_LOAD*/));
-          obj = new Magic(path, magic_flags);
-        } else {
-          return Nan::ThrowTypeError(
-            "First argument must be a string, Buffer, or integer"
-          );
-        }
-      } else {
-        obj = new Magic(nullptr, magic_flags);
-      }
-
-      obj->Wrap(args.This());
-      obj->Ref();
-
-      return args.GetReturnValue().Set(args.This());
-    }
-
-    static void DetectFile(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      Nan::HandleScope();
-      Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
-
-      if (!args[0]->IsString())
-        return Nan::ThrowTypeError("First argument must be a string");
-      if (!args[1]->IsFunction())
-        return Nan::ThrowTypeError("Second argument must be a callback function");
-
-      Local<Function> callback = Local<Function>::Cast(args[1]);
-
-      Nan::Utf8String str(args[0]);
-
-      DetectRequest* detect_req = new DetectRequest(callback,
-                                                    obj->msource,
-                                                    obj->mgc_buffer_len,
-                                                    obj->mgc_buffer.IsEmpty(),
-                                                    obj->mflags);
-      detect_req->data = strdup((const char*)*str);
-      detect_req->data_is_path = true;
-
-      int status = uv_queue_work(uv_default_loop(),
-                                 &detect_req->request,
-                                 Magic::DetectWork,
-                                 Magic::DetectAfter);
-      assert(status == 0);
-
-      args.GetReturnValue().Set(Nan::Undefined());
-    }
-
-    static void Detect(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      Nan::HandleScope();
-      Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
-
-      if (args.Length() < 2)
-        return Nan::ThrowTypeError("Expecting 2 arguments");
-      if (!Buffer::HasInstance(args[0]))
-        return Nan::ThrowTypeError("First argument must be a Buffer");
-      if (!args[1]->IsFunction())
-        return Nan::ThrowTypeError("Second argument must be a callback function");
-
-      Local<Function> callback = Local<Function>::Cast(args[1]);
-      Local<Object> buffer_obj = args[0].As<Object>();
-
-      DetectRequest* detect_req = new DetectRequest(callback,
-                                                    obj->msource,
-                                                    obj->mgc_buffer_len,
-                                                    obj->mgc_buffer.IsEmpty(),
-                                                    obj->mflags);
-      detect_req->data = Buffer::Data(buffer_obj);
-      detect_req->data_len = Buffer::Length(buffer_obj);
-      detect_req->data_buffer.Reset(buffer_obj);
-      detect_req->data_is_path = false;
-
-      int status = uv_queue_work(uv_default_loop(),
-                                 &detect_req->request,
-                                 Magic::DetectWork,
-                                 Magic::DetectAfter);
-      assert(status == 0);
-
-      return args.GetReturnValue().Set(args.This());
-    }
-
-    static void DetectWork(uv_work_t* req) {
-      DetectRequest* detect_req = static_cast<DetectRequest*>(req->data);
-      const char* result;
-      struct magic_set* magic = magic_open(detect_req->flags
-                                           | MAGIC_NO_CHECK_COMPRESS
-                                           | MAGIC_ERROR);
-
-      if (magic == nullptr) {
-#if NODE_MODULE_VERSION <= 0x000B
-        detect_req->error_message =
-          strdup(uv_strerror(uv_last_error(uv_default_loop())));
-#else
-// XXX libuv 1.x currently has no public cross-platform function to convert an
-//     OS-specific error number to a libuv error number. `-errno` should work
-//     for *nix, but just passing GetLastError() on Windows will not work ...
-# ifdef _MSC_VER
-        detect_req->error_message = strdup(uv_strerror(GetLastError()));
-# else
-        detect_req->error_message = strdup(uv_strerror(-errno));
-# endif
-#endif
-      } else if (detect_req->source_is_path) {
-        if (magic_load(magic, detect_req->magic_source) == -1
-            && magic_load(magic, fallbackPath) == -1) {
-          detect_req->error_message = strdup(magic_error(magic));
-          magic_close(magic);
-          magic = nullptr;
-        }
-      } else if (magic_load_buffers(magic,
-                                    (void**)&detect_req->magic_source,
-                                    &detect_req->source_len,
-                                    1) == -1) {
-        detect_req->error_message = strdup(magic_error(magic));
+    if (input_.source_is_path) {
+      // Mirrors the previous implementation: try the configured source, then
+      // fall back. A null path makes libmagic search MAGIC / its default paths,
+      // which is what an empty string here means.
+      const char* primary =
+          input_.source_path.empty() ? nullptr : input_.source_path.c_str();
+      const char* fallback =
+          input_.fallback_path.empty() ? nullptr : input_.fallback_path.c_str();
+      if (magic_load(magic, primary) == -1
+          && magic_load(magic, fallback) == -1) {
+        SetError(MagicError(magic));
         magic_close(magic);
-        magic = nullptr;
-      }
-
-      if (magic == nullptr)
         return;
+      }
+    } else {
+      // magic_load_buffers takes an array of buffers; we always pass one.
+      void* buffers[1] = { const_cast<void*>(
+          static_cast<const void*>(input_.source_data)) };
+      size_t sizes[1] = { input_.source_len };
+      if (magic_load_buffers(magic, buffers, sizes, 1) == -1) {
+        SetError(MagicError(magic));
+        magic_close(magic);
+        return;
+      }
+    }
 
-      if (detect_req->data_is_path) {
+    const char* result = nullptr;
+    if (input_.target_is_path) {
 #ifdef _WIN32
-        // open the file manually to help cope with potential unicode characters
-        // in filename
-        const char* ofn = detect_req->data;
-        int flags = O_RDONLY | O_BINARY;
-        int fd = -1;
-        int wLen;
-        wLen = MultiByteToWideChar(CP_UTF8, 0, ofn, -1, nullptr, 0);
-        if (wLen > 0) {
-          wchar_t* wfn = (wchar_t*)malloc(wLen * sizeof(wchar_t));
-          if (wfn) {
-            int wret = MultiByteToWideChar(CP_UTF8, 0, ofn, -1, wfn, wLen);
-            if (wret != 0)
-              _wsopen_s(&fd, wfn, flags, _SH_DENYNO, _S_IREAD);
-            free(wfn);
-            wfn = nullptr;
-          }
+      // Open the file ourselves so that non-ASCII paths work: the CRT's
+      // narrow-char open() uses the ANSI code page, which mangles them.
+      int fd = -1;
+      const int wlen = MultiByteToWideChar(CP_UTF8, 0, input_.target_path.c_str(),
+                                           -1, nullptr, 0);
+      if (wlen > 0) {
+        std::vector<wchar_t> wpath(static_cast<size_t>(wlen));
+        if (MultiByteToWideChar(CP_UTF8, 0, input_.target_path.c_str(), -1,
+                                wpath.data(), wlen) != 0) {
+          _wsopen_s(&fd, wpath.data(), O_RDONLY | O_BINARY, _SH_DENYNO, _S_IREAD);
         }
-        if (fd == -1) {
-          detect_req->free_error = false;
-          detect_req->error_message = "Error while opening file";
-          magic_close(magic);
-          return;
-        }
-        result = magic_descriptor(magic, fd);
-        _close(fd);
+      }
+      if (fd == -1) {
+        SetError("Error while opening file");
+        magic_close(magic);
+        return;
+      }
+      result = magic_descriptor(magic, fd);
+      // magic_descriptor may leave the offset moved; we own the fd either way.
+      _close(fd);
 #else
-        result = magic_file(magic, detect_req->data);
+      result = magic_file(magic, input_.target_path.c_str());
 #endif
-      } else {
-        result = magic_buffer(magic,
-                              (const void*)detect_req->data,
-                              detect_req->data_len);
-      }
-
-      if (result == nullptr) {
-        const char* error = magic_error(magic);
-        if (error)
-          detect_req->error_message = strdup(error);
-      } else {
-        detect_req->result = strdup(result);
-      }
-
-      magic_close(magic);
+    } else {
+      result = magic_buffer(magic,
+                            static_cast<const void*>(input_.target_data),
+                            input_.target_len);
     }
 
-    // Signature must match uv_after_work_cb exactly. It used to be declared
-    // without the `status` parameter and cast at the call site; that cast is
-    // undefined behaviour and is rejected by CFI/UBSan builds.
-    static void DetectAfter(uv_work_t* req, int status) {
-      // We never uv_cancel() these requests, so status is always 0.
-      assert(status == 0);
-      (void)status;
-      Nan::HandleScope scope;
-      DetectRequest* detect_req = static_cast<DetectRequest*>(req->data);
-      Local<Function> callback = Nan::New(detect_req->callback);
-      Local<Object> target = Nan::New<Object>();
-
-      if (detect_req->error_message) {
-        Local<Value> err = Nan::Error(detect_req->error_message);
-        Local<Value> argv[1] = { err };
-        detect_req->runInAsyncScope(target, callback, 1, argv);
-      } else {
-        Local<Value> argv[2];
-        int multi_result_flags =
-          (detect_req->flags & (MAGIC_CONTINUE | MAGIC_RAW));
-
-        argv[0] = Nan::Null();
-
-        if (multi_result_flags == (MAGIC_CONTINUE | MAGIC_RAW)) {
-          Local<Array> results = Nan::New<Array>();
-          if (detect_req->result) {
-            uint32_t i = 0;
-            const char* result_end =
-              detect_req->result + strlen(detect_req->result);
-            const char* last_match = detect_req->result;
-            const char* cur_match;
-            while (true) {
-              if (!(cur_match = strstr(last_match, "\n- "))) {
-                // Append remainder string
-                if (last_match < result_end) {
-                  Nan::Set(Local<Object>::Cast(results),
-                           i,
-                           Nan::New<String>(last_match).ToLocalChecked());
-                }
-                break;
-              }
-
-              size_t match_len = (cur_match - last_match);
-              char* match = new char[match_len + 1];
-              strncpy(match, last_match, match_len);
-              match[match_len] = '\0';
-
-              Nan::Set(Local<Object>::Cast(results),
-                       i++,
-                       Nan::New<String>(match).ToLocalChecked());
-
-              delete[] match;
-              last_match = cur_match + 3;
-            }
-          }
-          argv[1] = Local<Value>(results);
-        } else if (detect_req->result) {
-          argv[1] =
-            Local<Value>(Nan::New<String>(detect_req->result).ToLocalChecked());
-        } else  {
-          argv[1] = Local<Value>(Nan::New<String>().ToLocalChecked());
-        }
-
-        detect_req->runInAsyncScope(target, callback, 2, argv);
-      }
-
-      delete detect_req;
+    if (result == nullptr) {
+      // magic_error() may legitimately be null; fall through to an empty
+      // result in that case, matching the previous implementation.
+      const char* err = magic_error(magic);
+      if (err != nullptr)
+        SetError(err);
+    } else {
+      result_.assign(result);
+      have_result_ = true;
     }
 
-    static void SetFallback(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      if (fallbackPath)
-        free((void*)fallbackPath);
-
-      fallbackPath = nullptr;
-      if (args.Length() > 0 && args[0]->IsString()) {
-        Nan::Utf8String str(args[0]);
-        if (str.length() > 0)
-          fallbackPath = strdup((const char*)(*str));
-      }
-
-      return args.GetReturnValue().Set(args.This());
-    }
-
-    static void Initialize(Local<Object> target) {
-
-      Local<FunctionTemplate> tpl = Nan::New<FunctionTemplate>(New);
-
-      tpl->InstanceTemplate()->SetInternalFieldCount(1);
-      tpl->SetClassName(Nan::New<String>("Magic").ToLocalChecked());
-      Nan::SetPrototypeMethod(tpl, "detectFile", DetectFile);
-      Nan::SetPrototypeMethod(tpl, "detect", Detect);
-
-      constructor.Reset(Nan::GetFunction(tpl).ToLocalChecked());
-      Nan::Set(target,
-               Nan::New<String>("setFallback").ToLocalChecked(),
-               Nan::GetFunction(
-                 Nan::New<FunctionTemplate>(SetFallback)
-               ).ToLocalChecked()).FromJust();
-
-      Nan::Set(target,
-               Nan::New<String>("Magic").ToLocalChecked(),
-               Nan::GetFunction(tpl).ToLocalChecked()).FromJust();
-    }
-};
-
-extern "C" {
-  // Must match node::addon_register_func. Declaring only the first parameter
-  // and letting NODE_MODULE_X cast it is undefined behaviour, and produced a
-  // -Wcast-function-type warning on every supported compiler.
-  void init(Local<Object> target, Local<Value> module, void* priv) {
-    (void)module;
-    (void)priv;
-    Nan::HandleScope scope;
-    Magic::Initialize(target);
+    magic_close(magic);
   }
 
-  NODE_MODULE(magic, init);
+  // Success path. Callback receives (null, result).
+  void OnOK() override {
+    Napi::Env env = Env();
+    Napi::HandleScope scope(env);
+
+    Napi::Value payload;
+    if ((input_.flags & (MAGIC_CONTINUE | MAGIC_RAW))
+        == (MAGIC_CONTINUE | MAGIC_RAW)) {
+      payload = SplitMatches(env);
+    } else if (have_result_) {
+      payload = Napi::String::New(env, result_);
+    } else {
+      payload = Napi::String::New(env, "");
+    }
+
+    keep_alive_.clear();
+    Callback().Call({ env.Null(), payload });
+  }
+
+  // Failure path. Callback receives (Error).
+  void OnError(const Napi::Error& e) override {
+    Napi::Env env = Env();
+    Napi::HandleScope scope(env);
+    keep_alive_.clear();
+    Callback().Call({ e.Value() });
+  }
+
+ private:
+  static const char* MagicError(struct magic_set* magic) {
+    const char* err = magic_error(magic);
+    return err != nullptr ? err : "unknown libmagic error";
+  }
+
+  // With MAGIC_CONTINUE|MAGIC_RAW libmagic returns all matches in one string,
+  // separated by "\n- ". Split it back into an array, preserving the previous
+  // implementation's exact semantics (including that a missing result yields an
+  // empty array).
+  Napi::Array SplitMatches(Napi::Env env) {
+    Napi::Array out = Napi::Array::New(env);
+    if (!have_result_)
+      return out;
+
+    uint32_t i = 0;
+    const char* const begin = result_.c_str();
+    const char* const end = begin + result_.size();
+    const char* last = begin;
+    for (;;) {
+      const char* next = strstr(last, "\n- ");
+      if (next == nullptr) {
+        if (last < end)
+          out.Set(i, Napi::String::New(env, last));
+        break;
+      }
+      out.Set(i++, Napi::String::New(env, last,
+                                     static_cast<size_t>(next - last)));
+      last = next + 3;
+    }
+    return out;
+  }
+
+  DetectInput input_;
+  std::vector<Napi::ObjectReference> keep_alive_;
+  std::string result_;
+  bool have_result_ = false;
+};
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// The Magic class.
+// ---------------------------------------------------------------------------
+class Magic : public Napi::ObjectWrap<Magic> {
+ public:
+  static void Init(Napi::Env env, Napi::Object exports) {
+    // No persistent handle on the constructor: the previous implementation kept
+    // one in a file-scope Nan::Persistent that was never read. Storing it would
+    // also mean destroying a FunctionReference during env teardown for no gain.
+    exports.Set("Magic", DefineClass(env, "Magic", {
+      InstanceMethod<&Magic::DetectFile>("detectFile"),
+      InstanceMethod<&Magic::Detect>("detect"),
+    }));
+  }
+
+  explicit Magic(const Napi::CallbackInfo& info)
+      : Napi::ObjectWrap<Magic>(info) {
+    Napi::Env env = info.Env();
+
+#ifndef _WIN32
+    int magic_flags = MAGIC_SYMLINK;
+#else
+    int magic_flags = MAGIC_NONE;
+#endif
+
+    if (info.Length() > 1) {
+      if (!info[1].IsNumber()) {
+        Napi::TypeError::New(env, "Second argument must be an integer")
+            .ThrowAsJavaScriptException();
+        return;
+      }
+      magic_flags = info[1].As<Napi::Number>().Int32Value();
+    }
+
+    if (info.Length() > 0) {
+      const Napi::Value arg = info[0];
+      if (arg.IsString()) {
+        source_is_path_ = true;
+        source_path_ = arg.As<Napi::String>().Utf8Value();
+      } else if (arg.IsBuffer()) {
+        source_is_path_ = false;
+        Napi::Buffer<char> buf = arg.As<Napi::Buffer<char>>();
+        source_data_ = buf.Data();
+        source_len_ = buf.Length();
+        // Hold the Buffer so source_data_ stays valid for this object's life.
+        source_buffer_ = Napi::Persistent(arg.As<Napi::Object>());
+      } else if (arg.IsNumber()) {
+        magic_flags = arg.As<Napi::Number>().Int32Value();
+        source_is_path_ = true;
+        // No explicit source: use the bundled database, exactly as the previous
+        // implementation did (it strdup'd fallbackPath into msource here).
+        source_path_ = env.GetInstanceData<AddonData>()->fallback_path;
+      } else if (arg.IsBoolean() && !arg.As<Napi::Boolean>().Value()) {
+        // `false` means: let libmagic search MAGIC / the usual paths.
+        source_is_path_ = true;
+        const char* p = magic_getpath(nullptr, 0 /* FILE_LOAD */);
+        // Windows blows up looking up the literal path "(null)".
+        if (p != nullptr && strncmp(p, "(null)", 6) != 0)
+          source_path_.assign(p);
+      } else {
+        Napi::TypeError::New(env,
+            "First argument must be a string, Buffer, or integer")
+            .ThrowAsJavaScriptException();
+        return;
+      }
+    } else {
+      // No arguments at all: bundled database, same as above.
+      source_path_ = env.GetInstanceData<AddonData>()->fallback_path;
+    }
+
+    // When returning multiple matches, MAGIC_RAW makes the output parseable
+    // into an array.
+    if (magic_flags & MAGIC_CONTINUE)
+      magic_flags |= MAGIC_RAW;
+
+    flags_ = magic_flags;
+  }
+
+  // detectFile(path, callback) -> undefined
+  Napi::Value DetectFile(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    if (info.Length() < 1 || !info[0].IsString()) {
+      Napi::TypeError::New(env, "First argument must be a string")
+          .ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    if (info.Length() < 2 || !info[1].IsFunction()) {
+      Napi::TypeError::New(env, "Second argument must be a callback function")
+          .ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+
+    DetectInput input = BaseInput(env);
+    input.target_is_path = true;
+    input.target_path = info[0].As<Napi::String>().Utf8Value();
+
+    Queue(info, std::move(input), Napi::Value());
+    return env.Undefined();
+  }
+
+  // detect(buffer, callback) -> this
+  //
+  // Returning `this` rather than undefined is a quirk of the original
+  // implementation; preserved deliberately.
+  Napi::Value Detect(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    if (info.Length() < 2) {
+      Napi::TypeError::New(env, "Expecting 2 arguments")
+          .ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    if (!info[0].IsBuffer()) {
+      Napi::TypeError::New(env, "First argument must be a Buffer")
+          .ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    if (!info[1].IsFunction()) {
+      Napi::TypeError::New(env, "Second argument must be a callback function")
+          .ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+
+    Napi::Buffer<char> buf = info[0].As<Napi::Buffer<char>>();
+
+    DetectInput input = BaseInput(env);
+    input.target_is_path = false;
+    input.target_data = buf.Data();
+    input.target_len = buf.Length();
+
+    Queue(info, std::move(input), info[0]);
+    return info.This();
+  }
+
+ private:
+  DetectInput BaseInput(Napi::Env env) {
+    DetectInput input;
+    input.source_is_path = source_is_path_;
+    input.source_path = source_path_;
+    input.source_data = source_data_;
+    input.source_len = source_len_;
+    input.fallback_path = env.GetInstanceData<AddonData>()->fallback_path;
+    input.flags = flags_;
+    return input;
+  }
+
+  // Hold strong references to the Magic instance (its std::strings back
+  // source_path_) and to any Buffer we kept a raw pointer into, so neither can
+  // be collected while the worker thread is running. Released in
+  // OnOK/OnError. This replaces the old obj->Ref() that was never undone.
+  void Queue(const Napi::CallbackInfo& info,
+             DetectInput input,
+             Napi::Value data_buffer) {
+    std::vector<Napi::ObjectReference> keep_alive;
+    keep_alive.push_back(Napi::Persistent(info.This().As<Napi::Object>()));
+    if (!source_buffer_.IsEmpty())
+      keep_alive.push_back(Napi::Persistent(source_buffer_.Value()));
+    if (!data_buffer.IsEmpty() && data_buffer.IsObject())
+      keep_alive.push_back(Napi::Persistent(data_buffer.As<Napi::Object>()));
+
+    Napi::Function cb = info[1].As<Napi::Function>();
+    auto* worker = new DetectWorker(cb, std::move(input), std::move(keep_alive));
+    worker->Queue();
+  }
+
+  bool source_is_path_ = true;
+  std::string source_path_;
+  const char* source_data_ = nullptr;
+  size_t source_len_ = 0;
+  Napi::ObjectReference source_buffer_;
+  int flags_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Module init.
+// ---------------------------------------------------------------------------
+namespace {
+
+Napi::Value SetFallback(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  auto* data = env.GetInstanceData<AddonData>();
+  data->fallback_path.clear();
+  if (info.Length() > 0 && info[0].IsString())
+    data->fallback_path = info[0].As<Napi::String>().Utf8Value();
+  return info.This();
 }
+
+Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
+  auto* data = new AddonData();
+  // Node destroys this when the addon instance (this Agent) tears down, which
+  // is what makes the addon safe to load in more than one thread.
+  env.SetInstanceData(data);
+
+  Magic::Init(env, exports);
+  exports.Set("setFallback", Napi::Function::New(env, SetFallback));
+  return exports;
+}
+
+}  // namespace
+
+// NODE_API_MODULE is context-aware, unlike the NODE_MODULE it replaces.
+NODE_API_MODULE(magic, InitAll)

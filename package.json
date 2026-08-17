@@ -1,23 +1,39 @@
 {
   "name": "@vishalkumar14/mmmagic",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "author": "Vishal Kumar",
   "description": "An async libmagic binding for node.js for detecting content types by data inspection",
   "main": "./lib/index",
   "dependencies": {
-    "nan": "^2.28.0"
+    "node-addon-api": "^8.9.2",
+    "node-gyp-build": "^4.8.4"
   },
   "devDependencies": {
-    "node-gyp": "^11.4.2"
+    "node-gyp": "^11.4.2",
+    "prebuildify": "^6.0.1"
   },
   "scripts": {
-    "install": "node-gyp rebuild",
+    "install": "node-gyp-build",
     "rebuild": "node-gyp rebuild",
-    "test": "npm run test:upstream && npm run test:mime && npm run test:largefile",
+    "prebuild": "prebuildify --napi --strip --tag-libc",
+    "test": "npm run test:upstream && npm run test:mime && npm run test:largefile && npm run test:worker",
     "test:upstream": "node test/test.js",
     "test:mime": "node --test test/test-mime.js",
-    "test:largefile": "node --test test/test-largefile.js"
+    "test:largefile": "node --test test/test-largefile.js",
+    "test:worker": "node --test test/test-worker.js"
   },
+  "files": [
+    "lib/",
+    "src/",
+    "deps/",
+    "magic/",
+    "prebuilds/",
+    "binding.gyp",
+    "README.md",
+    "the project notes",
+    "the project notes",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=22.0.0"
   },

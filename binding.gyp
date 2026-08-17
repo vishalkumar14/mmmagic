@@ -1,13 +1,27 @@
 {
   'targets': [
     {
+      # node.napi.node: the name prebuildify/node-gyp-build expect for an
+      # ABI-stable Node-API addon. One binary serves every Node >= 22.
       'target_name': 'magic',
       'sources': [
         'src/binding.cc',
       ],
       'include_dirs': [
         'deps/libmagic/src',
-        "<!(node -e \"require('nan')\")"
+        "<!@(node -p \"require('node-addon-api').include_dir\")",
+      ],
+      'dependencies': [
+        'deps/libmagic/libmagic.gyp:libmagic',
+      ],
+      'defines': [
+        # Keep node-gyp's default -fno-exceptions: errors are surfaced with
+        # ThrowAsJavaScriptException() + an early return instead.
+        'NAPI_DISABLE_CPP_EXCEPTIONS',
+        # Pin the Node-API surface we rely on. NAPI 8 is present in every
+        # Node >= 12.22 / 14.17, far below our floor, so the prebuilt binary
+        # stays loadable on anything current.
+        'NAPI_VERSION=8',
       ],
       'cflags!': [ '-O2' ],
       'cflags+': [ '-O3' ],
@@ -15,30 +29,26 @@
       'cflags_cc+': [ '-O3' ],
       'cflags_c!': [ '-O2' ],
       'cflags_c+': [ '-O3' ],
-      'dependencies': [
-        'deps/libmagic/libmagic.gyp:libmagic',
-      ],
       'conditions': [
         ['OS=="mac"', {
           'xcode_settings': {
-            # MACOSX_DEPLOYMENT_TARGET is deliberately NOT set here. It used to
-            # be pinned to 10.15, which (a) predates Apple Silicon and Node 24's
-            # macOS floor, and (b) applied only to this target — deps/libmagic
-            # inherited node-gyp's default instead, so every link emitted
-            #   ld: warning: object file ... was built for newer 'macOS'
-            #   version (13.5) than being linked (10.15)
-            # Leaving it unset lets node-gyp's common.gypi pick one value for
-            # both targets, which tracks the Node version being built against.
+            # MACOSX_DEPLOYMENT_TARGET is deliberately unset.
+            # Setting it on this target only left deps/libmagic on node-gyp's
+            # default and produced a link-time version-mismatch warning per
+            # object file.
             #
-            # MUST stay >= C++20. Node 24+ ships a v8config.h containing
-            #   #error "C++20 or later required."
-            # and V8's headers use concepts/requires. On Linux node-gyp's own
-            # common.gypi already passes -std=gnu++20, which is why Linux builds
-            # kept working; on macOS this key overrides it, so pinning c++17
-            # here broke every macOS build from Node 24 onwards.
+            # node-addon-api requires C++17; Node 24+ V8 headers require C++20.
+            # gnu++20 satisfies both. This must never be lowered.
             'CLANG_CXX_LANGUAGE_STANDARD': 'gnu++20',
             'CLANG_CXX_LIBRARY': 'libc++',
-          }
+          },
+        }],
+        ['OS=="win"', {
+          'msvs_settings': {
+            'VCCLCompilerTool': {
+              'AdditionalOptions': [ '/std:c++20' ],
+            },
+          },
         }],
       ],
     },
