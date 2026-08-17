@@ -20,7 +20,8 @@
     "test:upstream": "node test/test.js",
     "test:mime": "node --test test/test-mime.js",
     "test:largefile": "node --test test/test-largefile.js",
-    "test:worker": "node --test test/test-worker.js"
+    "test:worker": "node --test test/test-worker.js",
+    "test:legacy": "node test/legacy-smoke.js"
   },
   "files": [
     "lib/",

@@ -28,7 +28,7 @@ require a rebuild.
 | 22 | **Supported** | in CI |
 | 20 | Works | verified by hand; EOL April 2026, not in CI |
 | 18 | Works | verified by hand; EOL April 2025, not in CI |
-| 16, 14 | Prebuilt binary loads | EOL since 2023. Source builds do **not** work — `node-addon-api` requires Node 18+. Do not rely on this. |
+| 16, 14 | Fully functional via prebuilt binary | 28/28 checks on Linux x64/arm64 and macOS x64/arm64. EOL since 2023 and **not supported** — source builds do not work, because `node-addon-api` requires Node 18+. |
 
 "Supported" means it is in the CI matrix *and* still maintained upstream by the
 Node.js project. `engines` is set to `>=18.0.0` because that is the floor for the
