@@ -1,3 +1,7 @@
+> **Internal fork.** Modernised for Node.js 22 / 24 / 26.
+> the Docker build matrix, and the tested-platform status.
+> The public JavaScript API below is unchanged.
+
 
 Description
 ===========
