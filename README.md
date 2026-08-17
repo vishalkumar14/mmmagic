@@ -15,7 +15,48 @@ An async libmagic binding for [node.js](http://nodejs.org/) for detecting conten
 Requirements
 ============
 
-* [node.js](http://nodejs.org/) -- v4.0.0 or newer
+**Minimum: Node.js 18.0.0** (`engines.node: ">=18.0.0"`).
+
+Because the addon is Node-API, one prebuilt binary per platform serves every
+Node version — there is no per-Node-major binary, and upgrading Node does not
+require a rebuild.
+
+| Node | Status | Notes |
+|---|---|---|
+| 26 | **Supported** | verified, in CI |
+| 24 | **Supported** | verified, in CI |
+| 22 | **Supported** | verified, in CI |
+| 20 | Works, not supported | verified by hand; EOL April 2026, not in CI |
+| 18 | Works, not supported | verified by hand; EOL April 2025, not in CI |
+| ≤ 16 | **Not supported** | see below |
+
+"Supported" means it is in the CI matrix *and* still maintained upstream by the
+Node.js project. 18 and 20 genuinely work — the same prebuilt binary loads and
+the full test suite passes — but both are past end-of-life, so they are not
+tested on every commit.
+
+Verified with a single binary built on Node 22, installed from the packed
+tarball into containers with no compiler, no Python and no make:
+
+```
+node v18.20.8  ->  OK   detect -> text/plain
+node v20.20.2  ->  OK   detect -> text/plain
+node v22.23.2  ->  OK   detect -> text/plain
+node v24.19.0  ->  OK   detect -> text/plain
+node v26.7.0   ->  OK   detect -> text/plain
+```
+
+**Why 16 is the cut-off.** The binary itself would load — it targets Node-API 8,
+present since Node 12.22 / 14.17, and `node-gyp-build` resolves it correctly on
+Node 16. The blocker is npm: npm 8, which ships with Node 16, runs
+`node-gyp rebuild` for any package containing a `binding.gyp` instead of
+honouring the `install` script. So installing on Node 16 demands a full C++
+toolchain even though a usable prebuilt binary is sitting right there. Node 16
+reached end-of-life in September 2023.
+
+**Building from source** — contributors, or any platform without a prebuilt
+binary — additionally needs Python 3, `make`, and a C++17-capable compiler
+(C++20 for Node 24 and later). On Windows that means Visual Studio Build Tools
 
 
 Install
