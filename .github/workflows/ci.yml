@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main, node26-migration]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Primary matrix: the three Node versions we claim to support, on the
+  # platforms we can get hosted runners for.
+  build:
+    name: node${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '26']
+        os:
+          - ubuntu-latest      # Linux x64
+          - ubuntu-24.04-arm   # Linux ARM64
+          - macos-14           # macOS ARM64 (Apple Silicon)
+          - macos-13           # macOS x64 (Intel)
+          - windows-latest     # Windows x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # node-gyp needs a Python; the runners have one but pin it explicitly so
+      # a runner image change cannot silently alter the toolchain.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Toolchain versions
+        shell: bash
+        run: |
+          node --version
+          npm --version
+          python --version
+          if [ "$RUNNER_OS" != "Windows" ]; then c++ --version || true; fi
+
+      # --foreground-scripts so compiler warnings and errors are visible in the
+      # log rather than summarised away by npm.
+      - name: Install and compile addon
+        run: npm install --foreground-scripts
+
+      - name: Test
+        run: npm test
+
+  # Same three Node versions through the Docker images, so the reproducible
+  # build path is covered too and not just the hosted runners.
+  docker:
+    name: docker node${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '26']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: |
+          docker build -f docker/Dockerfile \
+            --build-arg NODE_VERSION=${{ matrix.node }} \
+            -t mmmagic:node${{ matrix.node }} .
+      - name: Run test suite in image
+        run: docker run --rm mmmagic:node${{ matrix.node }}
+
+  # Windows 32-bit. Hosted runners are x64, so this cross-builds the addon for
+  # ia32 and runs it under the 32-bit Node. Kept separate from the main matrix
+  # because it is the least-supported target.
+  windows-ia32:
+    name: node${{ matrix.node }} / windows x86
+    runs-on: windows-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '26']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          architecture: x86
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm install --foreground-scripts
+      - run: npm test
