@@ -8,6 +8,10 @@
 # include <io.h>
 # include <fcntl.h>
 # include <wchar.h>
+// _SH_DENYNO (used in the _wsopen_s call in DetectWork) lives in <share.h>.
+// It was never included here; the code only ever compiled because older MSVC
+// CRTs happened to pull it in transitively.
+# include <share.h>
 #endif
 
 #include "magic.h"
@@ -38,7 +42,7 @@ public:
     if (data_is_path)
       free(data);
     if (free_error)
-      free(error_message);
+      free((void*)error_message);
     free((void*)result);
   }
 
@@ -57,7 +61,10 @@ public:
   int flags;
 
   bool free_error;
-  char* error_message;
+  // const because the Windows path assigns a string literal to it (with
+  // free_error = false). Converting a string literal to char* is ill-formed in
+  // C++11 and later.
+  const char* error_message;
 
   const char* result;
 };
@@ -181,7 +188,7 @@ public:
       int status = uv_queue_work(uv_default_loop(),
                                  &detect_req->request,
                                  Magic::DetectWork,
-                                 (uv_after_work_cb)Magic::DetectAfter);
+                                 Magic::DetectAfter);
       assert(status == 0);
 
       args.GetReturnValue().Set(Nan::Undefined());
@@ -214,7 +221,7 @@ public:
       int status = uv_queue_work(uv_default_loop(),
                                  &detect_req->request,
                                  Magic::DetectWork,
-                                 (uv_after_work_cb)Magic::DetectAfter);
+                                 Magic::DetectAfter);
       assert(status == 0);
 
       return args.GetReturnValue().Set(args.This());
@@ -307,7 +314,13 @@ public:
       magic_close(magic);
     }
 
-    static void DetectAfter(uv_work_t* req) {
+    // Signature must match uv_after_work_cb exactly. It used to be declared
+    // without the `status` parameter and cast at the call site; that cast is
+    // undefined behaviour and is rejected by CFI/UBSan builds.
+    static void DetectAfter(uv_work_t* req, int status) {
+      // We never uv_cancel() these requests, so status is always 0.
+      assert(status == 0);
+      (void)status;
       Nan::HandleScope scope;
       DetectRequest* detect_req = static_cast<DetectRequest*>(req->data);
       Local<Function> callback = Nan::New(detect_req->callback);
@@ -407,8 +420,13 @@ public:
 };
 
 extern "C" {
-  void init(Local<Object> target) {
-    Nan::HandleScope();
+  // Must match node::addon_register_func. Declaring only the first parameter
+  // and letting NODE_MODULE_X cast it is undefined behaviour, and produced a
+  // -Wcast-function-type warning on every supported compiler.
+  void init(Local<Object> target, Local<Value> module, void* priv) {
+    (void)module;
+    (void)priv;
+    Nan::HandleScope scope;
     Magic::Initialize(target);
   }
 
