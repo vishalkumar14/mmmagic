@@ -1,0 +1,158 @@
+name: Prebuild
+
+# Produces the platform binaries that ship inside the npm tarball, so consumers
+# never need a C++ toolchain.
+#
+# Because the addon is Node-API, ONE binary per platform serves every supported
+# Node version — there is no per-ABI matrix here, and none is needed when a new
+# Node major ships.
+#
+# prebuilds/ is gitignored on purpose: binaries are built here, not committed.
+# That means a release MUST be published from this workflow (or from an
+# artifact downloaded from it), never with a bare `npm publish` from a laptop —
+# that would ship a tarball containing only the publisher's own platform.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # macOS: build arm64 natively and cross-build x64 on the same runner.
+  # ---------------------------------------------------------------------------
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: npm install --ignore-scripts
+      - run: npx prebuildify --napi --strip
+      - run: npx prebuildify --napi --strip --arch x64
+      - run: file prebuilds/*/*.node
+      - uses: actions/upload-artifact@v4
+        with: { name: prebuilds-darwin, path: prebuilds/ }
+
+  # ---------------------------------------------------------------------------
+  # Linux: glibc and musl are different C libraries, so each needs its own
+  # binary. --tag-libc names them so node-gyp-build can tell them apart.
+  # ---------------------------------------------------------------------------
+  linux:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,    arch: x64 }
+          - { runner: ubuntu-24.04-arm, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: glibc (debian)
+        run: |
+          docker run --rm -v "$PWD":/src node:22-bookworm bash -c '
+            apt-get update -qq && apt-get install -y -qq python3 make g++
+            cp -r /src /w && cd /w && rm -rf build node_modules prebuilds
+            npm install --ignore-scripts
+            npx prebuildify --napi --strip --tag-libc
+            mkdir -p /src/prebuilds && cp -r /w/prebuilds/. /src/prebuilds/'
+
+      - name: musl (alpine)
+        run: |
+          docker run --rm -v "$PWD":/src node:22-alpine sh -c '
+            apk add --no-cache python3 make g++
+            cp -r /src /w && cd /w && rm -rf build node_modules prebuilds
+            npm install --ignore-scripts
+            npx prebuildify --napi --strip --tag-libc
+            mkdir -p /src/prebuilds && cp -r /w/prebuilds/. /src/prebuilds/'
+
+      - run: file prebuilds/*/*.node
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuilds-linux-${{ matrix.arch }}
+          path: prebuilds/
+
+  # ---------------------------------------------------------------------------
+  # Windows x64 + ia32. ia32 is cross-built on the x64 runner; VS ships the x86
+  # toolset alongside x64. Note that Node itself only publishes a 32-bit Windows
+  # build for Node 22 — 24 and 26 dropped it — so this binary is only reachable
+  # by Node 22 users.
+  # ---------------------------------------------------------------------------
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: npm install --ignore-scripts
+      - run: npx prebuildify --napi --strip
+      - run: npx prebuildify --napi --strip --arch ia32
+      - uses: actions/upload-artifact@v4
+        with: { name: prebuilds-win32, path: prebuilds/ }
+
+  # ---------------------------------------------------------------------------
+  # Windows ARM64. Separate job because it needs an arm64 runner.
+  # continue-on-error: the runner label is comparatively new, and a missing
+  # win32-arm64 binary degrades to a source build rather than breaking install.
+  # ---------------------------------------------------------------------------
+  windows-arm:
+    runs-on: windows-11-arm
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: npm install --ignore-scripts
+      - run: npx prebuildify --napi --strip
+      - uses: actions/upload-artifact@v4
+        with: { name: prebuilds-win32-arm64, path: prebuilds/ }
+
+  # ---------------------------------------------------------------------------
+  # Collect everything, then prove the tarball installs with NO toolchain
+  # present before it is allowed anywhere near a registry.
+  # ---------------------------------------------------------------------------
+  package:
+    needs: [macos, linux, windows, windows-arm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      - uses: actions/download-artifact@v4
+        with: { pattern: prebuilds-*, path: artifacts, merge-multiple: false }
+
+      - name: Merge prebuilds
+        run: |
+          mkdir -p prebuilds
+          find artifacts -mindepth 2 -maxdepth 2 -type d -exec cp -r {} prebuilds/ \;
+          find prebuilds -type f -name '*.node' | sort
+
+      - name: Pack
+        run: npm pack --pack-destination .
+
+      # A tarball that needs a compiler is a failed release, so assert it.
+      - name: Verify install with no toolchain
+        run: |
+          TARBALL=$(ls *.tgz)
+          docker run --rm -v "$PWD/$TARBALL":/pkg.tgz:ro node:26-slim sh -c '
+            command -v make && { echo "expected no toolchain"; exit 1; }
+            mkdir /c && cd /c && npm init -y >/dev/null
+            npm install /pkg.tgz
+            node -e "
+              const m = require(\"@vishalkumar14/mmmagic\");
+              new m.Magic(m.MAGIC_MIME_TYPE).detectFile(\"/etc/hostname\", (e, r) => {
+                if (e) { console.error(e); process.exit(1); }
+                console.log(\"detected:\", r);
+              });
+            "'
+
+      - uses: actions/upload-artifact@v4
+        with: { name: npm-tarball, path: '*.tgz' }

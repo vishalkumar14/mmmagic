@@ -51,6 +51,12 @@ jobs:
       - name: Test
         run: npm test
 
+      # Node-API is ABI-stable: prove one locally built binary is loaded
+      # by this Node version without a rebuild.
+      - name: Report loaded binary
+        shell: bash
+        run: node -e "require('./lib/index'); console.log('loaded:', require('node-gyp-build').path('.'))"
+
   # Same three Node versions through the Docker images, so the reproducible
   # build path is covered too and not just the hosted runners.
   docker:
