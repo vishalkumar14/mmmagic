@@ -1,0 +1,37 @@
+# Windows checkouts default to core.autocrlf=true. Left unmanaged, that rewrites
+# line endings on checkout — which would corrupt every binary fixture and the
+# compiled magic database, and the resulting MIME-detection failures would look
+# like addon bugs rather than checkout damage.
+
+# Never touch these.
+*.mgc   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.zip   binary
+*.pdf   binary
+*.tgz   binary
+*.gz    binary
+
+# Text fixtures: pin to LF so the same bytes are inspected on every platform.
+# libmagic reports text/plain for both LF and CRLF, but the default
+# MAGIC_NONE description does change ("ASCII text" vs "ASCII text, with CRLF
+# line terminators"), so keeping them stable keeps assertions meaningful.
+test/fixtures/*.txt  text eol=lf
+test/fixtures/*.csv  text eol=lf
+test/fixtures/*.json text eol=lf
+test/fixtures/*.xml  text eol=lf
+
+# Shell scripts and container files must stay LF or they break under bash.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+
+# Source: normalise in the repo, let git hand out native endings on checkout.
+*.c   text
+*.h   text
+*.cc  text
+*.js  text
+*.json text
+*.yml text
+*.md  text
+*.gyp text
