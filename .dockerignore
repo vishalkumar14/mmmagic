@@ -1,0 +1,8 @@
+# Host build artefacts must never leak into the image: build/Release/magic.node
+# from a macOS arm64 host is not loadable inside a linux/amd64 container, and a
+# stale one would mask a compile failure.
+build
+node_modules
+.git
+.worktrees
+npm-debug.log

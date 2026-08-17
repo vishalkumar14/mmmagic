@@ -1,0 +1,30 @@
+# Node compatibility matrix.
+#
+#   docker compose build            # build all three
+#   docker compose run --rm node26  # build + test on Node 26
+#   docker compose up               # run every version's test suite
+#
+# Each service compiles the addon from scratch inside the image, so a green run
+# proves npm install + native compilation + require + MIME detection + tests.
+services:
+  node22:
+    build: &build
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        NODE_VERSION: "22"
+    image: mmmagic:node22
+
+  node24:
+    build:
+      <<: *build
+      args:
+        NODE_VERSION: "24"
+    image: mmmagic:node24
+
+  node26:
+    build:
+      <<: *build
+      args:
+        NODE_VERSION: "26"
+    image: mmmagic:node26
