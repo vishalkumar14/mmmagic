@@ -12,7 +12,11 @@
   },
   "scripts": {
     "install": "node-gyp rebuild",
-    "test": "node test/test.js"
+    "rebuild": "node-gyp rebuild",
+    "test": "npm run test:upstream && npm run test:mime && npm run test:largefile",
+    "test:upstream": "node test/test.js",
+    "test:mime": "node --test test/test-mime.js",
+    "test:largefile": "node --test test/test-largefile.js"
   },
   "engines": {
     "node": ">=22.0.0"

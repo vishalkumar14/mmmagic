@@ -1,0 +1,6 @@
+{
+  "merchantId": "M12345",
+  "outlet": "Koramangala",
+  "items": [{"sku": "DOSA-01", "qty": 2}],
+  "total": 240.0
+}

@@ -1,0 +1,9 @@
+The quick brown fox jumps over the lazy dog.
+This file has no magic-byte signature; libmagic must fall back to its
+text/encoding heuristics to classify it.
+The quick brown fox jumps over the lazy dog.
+This file has no magic-byte signature; libmagic must fall back to its
+text/encoding heuristics to classify it.
+The quick brown fox jumps over the lazy dog.
+This file has no magic-byte signature; libmagic must fall back to its
+text/encoding heuristics to classify it.
