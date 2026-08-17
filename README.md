@@ -23,40 +23,51 @@ require a rebuild.
 
 | Node | Status | Notes |
 |---|---|---|
-| 26 | **Supported** | verified, in CI |
-| 24 | **Supported** | verified, in CI |
-| 22 | **Supported** | verified, in CI |
-| 20 | Works, not supported | verified by hand; EOL April 2026, not in CI |
-| 18 | Works, not supported | verified by hand; EOL April 2025, not in CI |
-| ≤ 16 | **Not supported** | see below |
+| 26 | **Supported** | in CI |
+| 24 | **Supported** | in CI |
+| 22 | **Supported** | in CI |
+| 20 | Works | verified by hand; EOL April 2026, not in CI |
+| 18 | Works | verified by hand; EOL April 2025, not in CI |
+| 16, 14 | Prebuilt binary loads | EOL since 2023. Source builds do **not** work — `node-addon-api` requires Node 18+. Do not rely on this. |
 
 "Supported" means it is in the CI matrix *and* still maintained upstream by the
-Node.js project. 18 and 20 genuinely work — the same prebuilt binary loads and
-the full test suite passes — but both are past end-of-life, so they are not
-tested on every commit.
+Node.js project. `engines` is set to `>=18.0.0` because that is the floor for the
+*guaranteed* path: if no prebuilt binary matches your platform, the install
+falls back to compiling from source, and that needs Node 18+.
 
-Verified with a single binary built on Node 22, installed from the packed
-tarball into containers with no compiler, no Python and no make:
+Verified with a single set of prebuilt binaries, installed from the packed
+tarball into containers with **no compiler, no Python and no make**:
 
-```
-node v18.20.8  ->  OK   detect -> text/plain
-node v20.20.2  ->  OK   detect -> text/plain
-node v22.23.2  ->  OK   detect -> text/plain
-node v24.19.0  ->  OK   detect -> text/plain
-node v26.7.0   ->  OK   detect -> text/plain
-```
+| Image | glibc | Node | Result |
+|---|---|---|---|
+| `node:14-slim` | 2.28 | v14.21.3 | install + detect OK |
+| `node:16-slim` | 2.28 | v16.20.2 | install + detect OK |
+| `node:18-bullseye` | 2.31 | v18.20.8 | install + detect OK |
+| `node:20-bullseye` | 2.31 | v20.20.2 | install + detect OK |
+| `node:22-bullseye` | 2.31 | v22.23.2 | install + detect OK |
+| `node:22-bookworm` | 2.36 | v22.23.2 | install + detect OK |
+| `node:24-slim` | 2.36 | v24.19.0 | install + detect OK |
+| `node:26-slim` | 2.41 | v26.7.0 | install + detect OK |
+| `node:24-alpine` | musl | v24.19.0 | install + detect OK |
+| `node:26-alpine` | musl | v26.7.0 | install + detect OK |
 
-**Why 16 is the cut-off.** The binary itself would load — it targets Node-API 8,
-present since Node 12.22 / 14.17, and `node-gyp-build` resolves it correctly on
-Node 16. The blocker is npm: npm 8, which ships with Node 16, runs
-`node-gyp rebuild` for any package containing a `binding.gyp` instead of
-honouring the `install` script. So installing on Node 16 demands a full C++
-toolchain even though a usable prebuilt binary is sitting right there. Node 16
-reached end-of-life in September 2023.
+## glibc floor (Linux)
+
+The Linux glibc binaries are built on Debian bullseye on purpose and require no
+symbol newer than **`GLIBC_2.28`**, which covers Debian 10+, Ubuntu 18.04+,
+RHEL 8+ and Amazon Linux 2023.
+
+This matters more than it looks. A glibc binary carries a floor equal to the
+newest versioned symbol it references. Built on Debian bookworm it needed
+`GLIBC_2.33` and would not load on Debian 11, Ubuntu 20.04, RHEL 9 or any
+`node:*-bullseye` image — **including on fully supported Node versions**. The
+failure is quiet: `node-gyp-build` finds the prebuild, `dlopen` fails, and it
+falls back to a source build, so it surfaces as "needs a compiler" and never
+mentions glibc. CI asserts the floor stays at or below `GLIBC_2.28`.
 
 **Building from source** — contributors, or any platform without a prebuilt
-binary — additionally needs Python 3, `make`, and a C++17-capable compiler
-(C++20 for Node 24 and later). On Windows that means Visual Studio Build Tools
+binary — needs Node 18+, Python 3, `make`, and a C++17-capable compiler (C++20
+for Node 24 and later). On Windows that means Visual Studio Build Tools with the
 
 
 Install

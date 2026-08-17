@@ -51,14 +51,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: glibc (debian)
+      # MUST build on bullseye (glibc 2.31), NOT bookworm (2.36).
+      #
+      # A glibc binary carries a floor equal to the newest versioned symbol it
+      # references, and it will not load on anything older. Built on bookworm
+      # it required GLIBC_2.33, which silently excluded Debian 11, Ubuntu 20.04,
+      # RHEL 9 and every node:*-bullseye image -- on those, node-gyp-build finds
+      # the prebuild, fails to dlopen it, and quietly falls back to a source
+      # build, so the failure surfaces as "needs a compiler" rather than
+      # anything mentioning glibc.
+      #
+      # Built here the binary tops out at GLIBC_2.28, which covers Debian 10+
+      # and Ubuntu 18.04+. Buster (2.28) would be lower still but ships
+      # Python 3.7, which modern gyp cannot parse.
+      - name: glibc (debian bullseye - old glibc floor on purpose)
         run: |
-          docker run --rm -v "$PWD":/src node:22-bookworm bash -c '
+          docker run --rm -v "$PWD":/src node:22-bullseye bash -c '
             apt-get update -qq && apt-get install -y -qq python3 make g++
             cp -r /src /w && cd /w && rm -rf build node_modules prebuilds
             npm install --ignore-scripts
             npx prebuildify --napi --strip --tag-libc
             mkdir -p /src/prebuilds && cp -r /w/prebuilds/. /src/prebuilds/'
+
+      # Fail the build if the glibc floor creeps up, rather than discovering it
+      # from a user on an older distro.
+      - name: Assert glibc floor <= 2.28
+        run: |
+          MAX=$(objdump -T prebuilds/linux-*/*.glibc.node \
+                | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1)
+          echo "highest required symbol: $MAX"
+          case "$MAX" in
+            GLIBC_2.1[0-9]|GLIBC_2.2[0-8]|GLIBC_2.[0-9]) ;;
+            *) echo "::error::glibc floor regressed to $MAX (want <= GLIBC_2.28)"; exit 1 ;;
+          esac
 
       - name: musl (alpine)
         run: |
