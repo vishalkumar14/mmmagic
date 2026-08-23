@@ -7,7 +7,7 @@
 //   2. Passing a callback changes NOTHING -- same results, same return values.
 //
 // The second half is what makes this safe to ship: every existing call site in
-// the API service and the batch workers uses the callback form and must be unaffected.
+// the API services and batch workers uses the callback form and must be unaffected.
 
 const test = require('node:test');
 const assert = require('node:assert');
