@@ -1,206 +1,544 @@
-> **Internal fork.** Modernised for Node.js 22 / 24 / 26.
-> the Docker build matrix, and the tested-platform status.
-> The public JavaScript API below is unchanged.
+# @vishalkumar14/mmmagic
 
+Detect what a file **actually is** by looking at its contents, not its name.
 
-Description
-===========
+This is an internal fork of [previous-scope/mmmagic](https://github.com/previous-scope/mmmagic),
+modernised for current Node.js. It wraps **libmagic** — the same library behind
+the Unix `file` command — as a native Node addon.
 
-An async libmagic binding for [node.js](http://nodejs.org/) for detecting content types by data inspection.
+```javascript
+const mmm = require('@vishalkumar14/mmmagic');
 
-[![Build Status](https://travis-ci.org/the original project.svg?branch=master)](https://travis-ci.org/the original project)
-[![Build status](https://ci.appveyor.com/api/projects/status/mva462lka1ap5a3t)](https://ci.appveyor.com/project/the original project)
+const magic = new mmm.Magic(mmm.MAGIC_MIME_TYPE);
+const type  = await magic.detectFile('/tmp/upload.csv');
+// 'text/plain'
+```
 
+**Why content and not the extension?** Because a user can rename `virus.exe` to
+`invoice.csv` and your extension check will believe them. mmmagic reads the bytes.
 
-Requirements
-============
+**Why not `file-type` or `isbinaryfile`?** They match magic-byte signatures. A
+plain text or CSV file has no signature at all, so they cannot classify it.
+libmagic falls back to text heuristics and returns `text/plain`, which is
+exactly what CSV upload validation needs.
 
-**Minimum: Node.js 18.0.0** (`engines.node: ">=18.0.0"`).
+---
 
-Because the addon is Node-API, one prebuilt binary per platform serves every
-Node version — there is no per-Node-major binary, and upgrading Node does not
-require a rebuild.
+## Contents
+
+- [Install](#install) · [Do I need a compiler?](#do-i-need-a-compiler)
+- [Quick start](#quick-start) · [Examples](#examples)
+- [What gets detected](#what-gets-detected)
+- [API](#api) · [Flags](#flags)
+- [Compatibility](#compatibility): [Node](#node-versions) · [Platforms](#platforms)
+- [Requirements](#requirements-for-building-from-source)
+- [Versions](#whats-inside)
+- [Limitations](#limitations--known-issues)
+- [Other docs](#other-documents)
+
+---
+
+## Install
+
+```bash
+npm install @vishalkumar14/mmmagic
+```
+
+### Do I need a compiler?
+
+**Usually no.** The package ships prebuilt binaries for common platforms. On
+those, install just copies a file into place.
+
+| Situation | Compiler needed? |
+|---|---|
+| Installing on a platform we ship a binary for | **No** |
+| Installing on any other platform | Yes — it builds from source |
+| Working from a git clone of this repo | Yes — `prebuilds/` is not committed |
+
+Prebuilt binaries are shipped for:
+
+```
+macOS      arm64 (Apple Silicon), x64 (Intel)
+Linux      x64, arm64   — both glibc and musl (Alpine)
+Windows    x64, arm64, x86 (32-bit)
+```
+
+Because this is a **Node-API** addon, *one binary per platform works on every
+Node version.* Upgrading Node does not require a reinstall or rebuild.
+
+If you do need to build, see [Requirements](#requirements-for-building-from-source).
+
+---
+
+## Quick start
+
+```javascript
+const mmm = require('@vishalkumar14/mmmagic');
+
+// Create a detector. The flag decides what kind of answer you get back.
+const magic = new mmm.Magic(mmm.MAGIC_MIME_TYPE);
+
+// Promise style
+const type = await magic.detectFile('/tmp/photo.png');   // 'image/png'
+
+// Callback style — still fully supported
+magic.detectFile('/tmp/photo.png', (err, type) => {
+  if (err) throw err;
+  console.log(type);                                     // 'image/png'
+});
+```
+
+One detector can be reused for many files. Create a new one when you want
+different flags.
+
+---
+
+## Examples
+
+### 1. MIME type of a file
+
+```javascript
+const magic = new mmm.Magic(mmm.MAGIC_MIME_TYPE);
+await magic.detectFile('/tmp/report.pdf');    // 'application/pdf'
+```
+
+### 2. Text encoding instead of type
+
+```javascript
+const magic = new mmm.Magic(mmm.MAGIC_MIME_ENCODING);
+await magic.detectFile('/tmp/data.csv');      // 'us-ascii'
+await magic.detectFile('/tmp/utf16.csv');     // 'utf-16le'
+```
+
+### 3. Both at once
+
+```javascript
+const magic = new mmm.Magic(mmm.MAGIC_MIME);  // TYPE | ENCODING
+await magic.detectFile('/tmp/data.csv');      // 'text/plain; charset=us-ascii'
+```
+
+### 4. Human-readable description (the default)
+
+```javascript
+const magic = new mmm.Magic();                // no flags
+await magic.detectFile('/tmp/photo.png');
+// 'PNG image data, 1 x 1, 8-bit/color RGBA, non-interlaced'
+```
+
+### 5. Detect from a Buffer instead of a path
+
+```javascript
+const buf = fs.readFileSync('/tmp/photo.png');
+const magic = new mmm.Magic(mmm.MAGIC_MIME_TYPE);
+await magic.detect(buf);                      // 'image/png'
+```
+
+> Prefer `detectFile` for files on disk — see
+> [large files](#large-files-are-cheap).
+
+### 6. All matches, not just the best one
+
+```javascript
+const magic = new mmm.Magic(mmm.MAGIC_MIME_TYPE | mmm.MAGIC_CONTINUE);
+await magic.detectFile('/tmp/archive.zip');
+// ['application/zip', ...]      <- an Array, not a String
+```
+
+### 7. Many files at once
+
+Detection runs on Node's threadpool, so these genuinely overlap:
+
+```javascript
+const types = await Promise.all(
+  files.map((f) => new mmm.Magic(mmm.MAGIC_MIME_TYPE).detectFile(f)));
+```
+
+### 8. Handling errors
+
+```javascript
+// Promise style — rejects
+try {
+  await magic.detectFile('/no/such/file');
+} catch (err) {
+  // Error: cannot stat `/no/such/file' (No such file or directory)
+}
+
+// Callback style — error is the first argument
+magic.detectFile('/no/such/file', (err, type) => {
+  if (err) { /* handle */ }
+});
+```
+
+Passing the wrong argument type also rejects rather than throwing:
+
+```javascript
+await magic.detectFile(12345);   // rejects: First argument must be a string
+```
+
+### 9. Validating an upload
+
+```javascript
+const ALLOWED = ['image/png', 'image/jpeg'];
+
+async function isAllowed(filePath) {
+  const type = await new mmm.Magic(mmm.MAGIC_MIME_TYPE).detectFile(filePath);
+  return ALLOWED.includes(type);
+}
+```
+
+A `.png` renamed to `.jpg` is still reported as `image/png` — the extension is
+never consulted.
+
+---
+
+## What gets detected
+
+Every row below is asserted by the test suite against the bundled libmagic
+**5.32**. Newer libmagic returns different strings for some of these — see
+
+### Text
+
+| File | `MAGIC_MIME_TYPE` | `MAGIC_MIME_ENCODING` |
+|---|---|---|
+| `.txt` plain text | `text/plain` | `us-ascii` |
+| `.csv` comma-separated | `text/plain` | `us-ascii` |
+| `.csv` with CRLF | `text/plain` | `us-ascii` |
+| `.csv` UTF-8 with BOM | `text/plain` | `utf-8` |
+| `.csv` UTF-16 | `text/plain` | `utf-16le` |
+| `.json` | `text/plain` | `us-ascii` |
+| `.xml` | `text/xml` | `us-ascii` |
+| `.html` | `text/html` | `us-ascii` |
+| `.svg` | `image/svg+xml` | `us-ascii` |
+
+> **CSV and JSON come back as `text/plain`, not `text/csv` / `application/json`.**
+> libmagic 5.32 has no CSV or JSON detector, so they fall through to the text
+> heuristics. This is the behaviour existing callers depend on.
+
+### Images
+
+| File | Type |
+|---|---|
+| `.png` | `image/png` |
+| `.jpg` | `image/jpeg` |
+| `.gif` (87a and 89a) | `image/gif` |
+| `.tif` | `image/tiff` |
+| `.webp` | `image/webp` |
+| `.bmp` | `image/x-ms-bmp` |
+| `.ico` | `image/x-icon` |
+
+### Documents and archives
+
+| File | Type |
+|---|---|
+| `.pdf` | `application/pdf` |
+| `.zip` | `application/zip` |
+| `.tar` | `application/x-tar` |
+| `.gz` | `application/x-gzip` |
+| `.xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
+| `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` |
+| `.pptx` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` |
+| `.ods` | `application/vnd.oasis.opendocument.spreadsheet` |
+| `.odt` | `application/vnd.oasis.opendocument.text` |
+
+### Special cases
+
+| Input | Result |
+|---|---|
+| Empty **file** | `inode/x-empty` |
+| Empty **Buffer** | `application/x-empty` |
+| Directory | `inode/directory` |
+| Missing path | rejects with an `Error` |
+
+The empty file/Buffer difference is not a bug: `inode/*` answers come from
+libmagic stat-ing a path, and a Buffer has no path.
+
+---
+
+## API
+
+### `new Magic([source][, flags])`
+
+| Argument | Meaning |
+|---|---|
+| *(omitted)* | Use the bundled magic database |
+| `flags` (number) | Bundled database, with these flags |
+| `path` (string) | Use the magic database at this path |
+| `buffer` (Buffer) | Use a magic database held in memory |
+| `false` | Let libmagic search for a database (`MAGIC` env var, then system paths) |
+
+`flags` may be passed as the second argument in every form.
+
+### `magic.detectFile(path[, callback])`
+
+Inspects the file at `path`.
+
+- With a callback: calls `callback(err, result)`, returns `undefined`.
+- Without: returns a `Promise`.
+
+### `magic.detect(buffer[, callback])`
+
+Inspects the contents of `buffer`.
+
+- With a callback: calls `callback(err, result)`, returns the `Magic` instance.
+- Without: returns a `Promise`.
+
+`result` is a `String`, or an `Array` of strings when `MAGIC_CONTINUE` is set.
+
+---
+
+## Flags
+
+Combine with `|`.
+
+| Flag | Effect |
+|---|---|
+| `MAGIC_NONE` | Human-readable description (default) |
+| `MAGIC_MIME_TYPE` | Return the MIME type |
+| `MAGIC_MIME_ENCODING` | Return the character encoding |
+| `MAGIC_MIME` | Both: `type; charset=encoding` |
+| `MAGIC_CONTINUE` | Return **all** matches as an Array |
+| `MAGIC_SYMLINK` | Follow symlinks (**default on non-Windows**) |
+| `MAGIC_DEVICES` | Read the contents of device files |
+| `MAGIC_PRESERVE_ATIME` | Restore access time after reading |
+| `MAGIC_RAW` | Do not translate unprintable characters |
+| `MAGIC_APPLE` | Return the Apple creator/type code |
+| `MAGIC_DEBUG` | Print debug output |
+| `MAGIC_CHECK` | Print warnings to stderr |
+| `MAGIC_NO_CHECK_TAR` | Skip tar detection |
+| `MAGIC_NO_CHECK_SOFT` | Skip the magic database |
+| `MAGIC_NO_CHECK_APPTYPE` | Skip application-type detection |
+| `MAGIC_NO_CHECK_ELF` | Skip ELF detail parsing |
+| `MAGIC_NO_CHECK_TEXT` | Skip text detection |
+| `MAGIC_NO_CHECK_CDF` | Skip CDF (legacy Office) detection |
+| `MAGIC_NO_CHECK_TOKENS` | Skip token detection |
+| `MAGIC_NO_CHECK_ENCODING` | Skip encoding detection |
+
+20 constants, unchanged from upstream.
+
+---
+
+## Compatibility
+
+### Node versions
 
 | Node | Status | Notes |
 |---|---|---|
-| 26 | **Supported** | in CI |
-| 24 | **Supported** | in CI |
-| 22 | **Supported** | in CI |
-| 20 | Works | verified by hand; EOL April 2026, not in CI |
-| 18 | Works | verified by hand; EOL April 2025, not in CI |
-| 16, 14 | Fully functional via prebuilt binary | 28/28 checks on Linux x64/arm64 and macOS x64/arm64. EOL since 2023 and **not supported** — source builds do not work, because `node-addon-api` requires Node 18+. |
+| **26** | **Supported** | in CI |
+| **24** | **Supported** | in CI |
+| **22** | **Supported** | in CI |
+| 20 | Works | verified by hand; EOL April 2026 — not in CI |
+| 18 | Works | verified by hand; EOL April 2025 — not in CI |
+| 16, 14 | Works via prebuilt binary only | EOL since 2023. **Not supported.** Building from source fails — `node-addon-api` needs Node 18+. |
+| ≤ 12 | Not supported | — |
 
-"Supported" means it is in the CI matrix *and* still maintained upstream by the
-Node.js project. `engines` is set to `>=18.0.0` because that is the floor for the
-*guaranteed* path: if no prebuilt binary matches your platform, the install
-falls back to compiling from source, and that needs Node 18+.
+`engines.node` is `>=18.0.0`: the floor for the *guaranteed* path, since a
+platform with no matching prebuild must compile, and that needs Node 18+.
 
-Verified with a single set of prebuilt binaries, installed from the packed
-tarball into containers with **no compiler, no Python and no make**:
+**"Supported"** means it is in CI *and* still maintained by the Node.js project.
+18 and 20 genuinely work — the same binary loads and the whole suite passes —
+but they are past end-of-life, so we do not test them on every commit.
 
-| Image | glibc | Node | Result |
-|---|---|---|---|
-| `node:14-slim` | 2.28 | v14.21.3 | install + detect OK |
-| `node:16-slim` | 2.28 | v16.20.2 | install + detect OK |
-| `node:18-bullseye` | 2.31 | v18.20.8 | install + detect OK |
-| `node:20-bullseye` | 2.31 | v20.20.2 | install + detect OK |
-| `node:22-bullseye` | 2.31 | v22.23.2 | install + detect OK |
-| `node:22-bookworm` | 2.36 | v22.23.2 | install + detect OK |
-| `node:24-slim` | 2.36 | v24.19.0 | install + detect OK |
-| `node:26-slim` | 2.41 | v26.7.0 | install + detect OK |
-| `node:24-alpine` | musl | v24.19.0 | install + detect OK |
-| `node:26-alpine` | musl | v26.7.0 | install + detect OK |
+### Platforms
 
-## glibc floor (Linux)
+| Platform | Status | How it was verified |
+|---|---|---|
+| macOS arm64 (Apple Silicon) | **Confirmed** | built + full suite, Node 22/24/26 |
+| macOS x64 (Intel) | **Confirmed** | built + full suite, Node 22/24/26 (x86_64 binary under Rosetta) |
+| Linux x64 (glibc) | **Confirmed** | built + full suite in Docker, Node 22/24/26 |
+| Linux arm64 (glibc) | **Confirmed** | built + full suite in Docker, Node 22/24/26 |
+| Linux x64/arm64 (musl / Alpine) | **Confirmed** | install + detection on `node:24-alpine`, `node:26-alpine` |
+| Windows x64 | **Confirmed** | built with MSVC on Windows 11, Node 16/18/20/22/24/26 |
+| Windows arm64 | **Not tested** | prebuild job exists (`continue-on-error`) |
+| Windows x86 (32-bit) | **Not tested** | prebuild job exists. Node only ships 32-bit Windows for **Node 22** — 24 and 26 dropped it |
+| Linux ppc64le, s390x | **Not tested** | no prebuild; would build from source |
+| FreeBSD, OpenBSD, SunOS | **Not tested** | config headers are vendored but unexercised for years |
 
-The Linux glibc binaries are built on Debian bullseye on purpose and require no
-symbol newer than **`GLIBC_2.28`**, which covers Debian 10+, Ubuntu 18.04+,
-RHEL 8+ and Amazon Linux 2023.
+### What does *not* exist
 
-This matters more than it looks. A glibc binary carries a floor equal to the
-newest versioned symbol it references. Built on Debian bookworm it needed
-`GLIBC_2.33` and would not load on Debian 11, Ubuntu 20.04, RHEL 9 or any
-`node:*-bullseye` image — **including on fully supported Node versions**. The
-failure is quiet: `node-gyp-build` finds the prebuild, `dlopen` fails, and it
-falls back to a source build, so it surfaces as "needs a compiler" and never
-mentions glibc. CI asserts the floor stays at or below `GLIBC_2.28`.
+Worth stating because it gets asked for:
 
-**Building from source** — contributors, or any platform without a prebuilt
-binary — needs Node 18+, Python 3, `make`, and a C++17-capable compiler (C++20
-for Node 24 and later). On Windows that means Visual Studio Build Tools with the
+| Target | Reality |
+|---|---|
+| 32-bit macOS | Never existed — Apple removed 32-bit support |
+| 32-bit Linux | Node stopped shipping it after Node 10 |
+| 32-bit ARM Linux (armv7l) | Node 22 only; dropped in 24 and 26 |
 
+### Linux glibc floor
 
-Install
-=======
+The Linux glibc binaries need **no symbol newer than `GLIBC_2.28`**, covering
+Debian 10+, Ubuntu 18.04+, RHEL 8+, and Amazon Linux 2023. CI fails the build if
+that floor rises.
 
-    npm install mmmagic
+This matters: a binary built on a newer distro silently refuses to load on older
+ones, and the fallback is a source build — so it surfaces as "needs a compiler"
+and never mentions glibc.
 
+---
 
-Promises / async-await
-======================
+## Requirements for building from source
 
-Both `detectFile` and `detect` return a Promise when you omit the callback:
+Only needed if there is no prebuilt binary for your platform, or you are working
+from a git clone.
 
-```javascript
-  const mmm = require('@vishalkumar14/mmmagic');
+### All platforms
 
-  const magic = new mmm.Magic(mmm.MAGIC_MIME_TYPE);
-  const type  = await magic.detectFile('/path/to/upload.csv');   // 'text/plain'
+| Tool | Version |
+|---|---|
+| Node.js | 18 or newer |
+| Python | 3.8 or newer (for `node-gyp`) |
+| A C++ compiler | C++17 minimum; **C++20 required for Node 24+** |
+
+**CMake is not used.** This is `node-gyp`, which comes with npm.
+
+### macOS
+
+```bash
+xcode-select --install     # Xcode Command Line Tools
 ```
 
-Errors reject, including argument-type errors:
+That is all — it provides clang and `make`. Full Xcode is not required.
 
-```javascript
-  try {
-    await magic.detectFile('/no/such/file');
-  } catch (err) {
-    // Error: cannot stat `/no/such/file' (No such file or directory)
-  }
+### Linux (Debian / Ubuntu)
+
+```bash
+sudo apt-get install -y python3 make g++
 ```
 
-Detections run concurrently, so `Promise.all` does what you would hope:
+Alpine:
 
-```javascript
-  const types = await Promise.all(
-    files.map((f) => new mmm.Magic(mmm.MAGIC_MIME_TYPE).detectFile(f)));
+```bash
+apk add --no-cache python3 make g++
 ```
 
-**The callback form is unchanged** — pass a callback and you get exactly the old
-behaviour, including the return values (`detectFile` returns `undefined`,
-`detect` returns `this`). Nothing existing needs to be touched.
+### Windows
 
-**This did not make anything non-blocking; it already was.** Detection has
-always run on libuv's threadpool via `Napi::AsyncWorker`, never on the main
-thread. Promises change how the result reaches you, not when it happens or what
-it costs. There is a regression test that keeps a 1 ms interval running during
-six concurrent detections of a 34 MB file and asserts the event loop still
-ticks.
+You need **Visual Studio Build Tools 2022** with the **"Desktop development
+with C++"** workload. Build Tools installed *without* that workload is the
+single most common cause of install failure.
 
-Examples
-========
-
-* Get general description of a file:
-```javascript
-  var Magic = require('mmmagic').Magic;
-
-  var magic = new Magic();
-  magic.detectFile('node_modules/mmmagic/build/Release/magic.node', function(err, result) {
-      if (err) throw err;
-      console.log(result);
-      // output on Windows with 32-bit node:
-      //    PE32 executable (DLL) (GUI) Intel 80386, for MS Windows
-  });
-```
-* Get mime type for a file:
-```javascript
-  var mmm = require('mmmagic'),
-      Magic = mmm.Magic;
-
-  var magic = new Magic(mmm.MAGIC_MIME_TYPE);
-  magic.detectFile('node_modules/mmmagic/build/Release/magic.node', function(err, result) {
-      if (err) throw err;
-      console.log(result);
-      // output on Windows with 32-bit node:
-      //    application/x-dosexec
-  });
-```
-* Get mime type and mime encoding for a file:
-```javascript
-  var mmm = require('mmmagic'),
-      Magic = mmm.Magic;
-
-  var magic = new Magic(mmm.MAGIC_MIME_TYPE | mmm.MAGIC_MIME_ENCODING);
-  // the above flags can also be shortened down to just: mmm.MAGIC_MIME
-  magic.detectFile('node_modules/mmmagic/build/Release/magic.node', function(err, result) {
-      if (err) throw err;
-      console.log(result);
-      // output on Windows with 32-bit node:
-      //    application/x-dosexec; charset=binary
-  });
-```
-* Get general description of the contents of a Buffer:
-```javascript
-  var Magic = require('mmmagic').Magic;
-
-  var magic = new Magic(),
-        buf = new Buffer('import Options\nfrom os import unlink, symlink');
-  
-  magic.detect(buf, function(err, result) {
-      if (err) throw err;
-      console.log(result);
-      // output: Python script, ASCII text executable
-  });
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools --override `
+  "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install --id Python.Python.3.12
 ```
 
-API
-===
+VS 2019 (16.11+) also works. Keep the checkout path short — MSVC still hits the
+260-character path limit; `C:\dev\...` is safe.
 
-Magic methods
--------------
 
-* **(constructor)**([< _mixed_ >magicSource][, < _Integer_ >flags]) - Creates and returns a new Magic instance. `magicSource` (if specified) can either be a path string that points to a (compatible) magic file to use *or* it can be a _Buffer_ containing the contents of a (compatible) magic file. If `magicSource` is not a string and not `false`, the bundled magic file will be used. If `magicSource` is `false`, mmmagic will default to searching for a magic file to use (order of magic file searching: `MAGIC` env var -> various file system paths (see `man file`)). flags is a bitmask with the following valid values (available as constants on `require('mmmagic')`):
+---
 
-    * **MAGIC\_NONE** - No flags set
-    * **MAGIC\_DEBUG** - Turn on debugging
-    * **MAGIC\_SYMLINK** - Follow symlinks **(default for non-Windows)**
-    * **MAGIC\_DEVICES** - Look at the contents of devices
-    * **MAGIC\_MIME_TYPE** - Return the MIME type
-    * **MAGIC\_CONTINUE** - Return all matches (returned as an array of strings)
-    * **MAGIC\_CHECK** - Print warnings to stderr
-    * **MAGIC\_PRESERVE\_ATIME** - Restore access time on exit
-    * **MAGIC\_RAW** - Don't translate unprintable chars
-    * **MAGIC\_MIME\_ENCODING** - Return the MIME encoding
-    * **MAGIC\_MIME** - (**MAGIC\_MIME\_TYPE** | **MAGIC\_MIME\_ENCODING**)
-    * **MAGIC\_APPLE** - Return the Apple creator and type
-    * **MAGIC\_NO\_CHECK\_TAR** - Don't check for tar files
-    * **MAGIC\_NO\_CHECK\_SOFT** - Don't check magic entries
-    * **MAGIC\_NO\_CHECK\_APPTYPE** - Don't check application type
-    * **MAGIC\_NO\_CHECK\_ELF** - Don't check for elf details
-    * **MAGIC\_NO\_CHECK\_TEXT** - Don't check for text files
-    * **MAGIC\_NO\_CHECK\_CDF** - Don't check for cdf files
-    * **MAGIC\_NO\_CHECK\_TOKENS** - Don't check tokens
-    * **MAGIC\_NO\_CHECK\_ENCODING** - Don't check text encodings
+## What's inside
 
-* **detectFile**(< _String_ >path, < _Function_ >callback) - _(void)_ - Inspects the file pointed at by path. The callback receives two arguments: an < _Error_ > object in case of error (null otherwise), and a < _String_ > containing the result of the inspection.
+| Component | Version | Notes |
+|---|---|---|
+| **libmagic** | **5.32** (2018) | Vendored in `deps/libmagic`. Deliberately not upgraded — see below |
+| Magic database | `magic/magic.mgc`, 4.7 MB, format v14 | Must match the libmagic version |
+| `node-addon-api` | `^8.9.2` | C++ wrapper over Node-API |
+| `node-gyp-build` | `^4.8.4` | Picks prebuilt binary, else local build |
+| Node-API level | `NAPI_VERSION=8` | Keeps the binary loadable on a wide Node range |
+| `prebuildify` | `^6.0.1` | dev only — builds the shipped binaries |
+| `node-gyp` | `^11.4.2` | dev only |
 
-* **detect**(< _Buffer_ >data, < _Function_ >callback) - _(void)_ - Inspects the contents of data. The callback receives two arguments: an < _Error_ > object in case of error (null otherwise), and a < _String_ > containing the result of the inspection.
+No runtime dependency on `nan` — this fork was ported from NAN to Node-API
+
+### Why libmagic is still 5.32
+
+Upgrading to 5.48 **changes results callers depend on**: CSV becomes `text/csv`
+and JSON becomes `application/json`. Three backend upload validators compare
+against `'text/plain'` and would start rejecting every CSV.
+
+Full assessment, measured against real fixtures, plus the safe upgrade order:
+
+---
+
+## Limitations / known issues
+
+### Large files are cheap
+
+`detectFile` reads **at most 1 MiB** regardless of file size — libmagic's
+`FILE_BYTES_MAX`. A 120 MB CSV costs about the same as a 1 KB one:
+
+```
+120.5 MB CSV  ->  RSS +0.2 MB, 12 ms, 'text/plain'
+```
+
+`detect(buffer)` necessarily holds whatever you put in the Buffer, so for files
+on disk **prefer `detectFile`**. Reading the same file into a Buffer first costs
+the full 120 MB.
+
+### `tar` + `MAGIC_MIME_ENCODING` alone is wrong
+
+```javascript
+await new mmm.Magic(mmm.MAGIC_MIME_ENCODING).detectFile('x.tar');
+// 'application/x-tarbinary'   <- should be 'binary'
+```
+
+An upstream libmagic 5.32 bug (`is_tar.c` tests both MIME bits instead of the
+type bit). Fixed in newer libmagic. Use `MAGIC_MIME` or `MAGIC_MIME_TYPE`, both
+of which are correct. Pinned by a test so a version bump surfaces it.
+
+### Office files are detected by entry order
+
+`.xlsx` / `.docx` / `.pptx` are zip containers. libmagic only reports the
+specific Office type because `[Content_Types].xml` happens to be the **first**
+zip entry. A generator that orders entries differently is only detectable as
+`application/zip`. Real Office writes it first; not every tool does — so do not
+rely on this alone to validate a spreadsheet upload.
+
+### Semicolon-delimited CSV
+
+`a;b;c` is `text/plain`, same as comma-delimited — libmagic 5.32 has no CSV
+detector at all. (Newer libmagic detects comma CSV as `text/csv` but still
+reports semicolon-delimited as `text/plain`.)
+
+### Non-ASCII filenames on Windows
+
+Paths containing non-ASCII characters take a different code path
+(`magic_descriptor` rather than `magic_file`), which cannot stat the path. On
+such paths an empty file reports `application/x-empty` instead of
+`inode/x-empty`, and directories cannot be opened. ASCII paths match POSIX
+exactly.
+
+### Not thread-safe by libmagic design
+
+Each `Magic` instance opens its own libmagic handle per detection, so concurrent
+use is safe. The addon is context-aware and works inside `worker_threads`.
+
+---
+
+## Testing
+
+```bash
+npm test              # all suites (35 assertions)
+
+npm run test:upstream   # original upstream suite
+npm run test:mime       # MIME coverage across all fixtures
+npm run test:promise    # promise/async-await + callback compatibility
+npm run test:largefile  # proves large files are not read into memory
+npm run test:worker     # worker_threads support
+npm run test:legacy     # 28 checks without node:test, for Node 14/16
+```
+
+Reproducible builds across Node versions:
+
+```bash
+docker build -f docker/Dockerfile --build-arg NODE_VERSION=26 -t mmmagic:node26 .
+docker run --rm mmmagic:node26
+
+PLATFORMS="linux/amd64 linux/arm64" ./scripts/matrix.sh
+```
+
+---
+
+## Other documents
+
+| Document | What it covers |
+|---|---|
+
+---
+
+## License
+
+MIT. libmagic in `deps/libmagic` carries its own BSD-style license
+(`deps/libmagic/COPYING`).
