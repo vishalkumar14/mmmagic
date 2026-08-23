@@ -2,9 +2,8 @@
 
 Detect what a file **actually is** by looking at its contents, not its name.
 
-This is an internal fork of [previous-scope/mmmagic](https://github.com/previous-scope/mmmagic),
-modernised for current Node.js. It wraps **libmagic** — the same library behind
-the Unix `file` command — as a native Node addon.
+It wraps **libmagic** — the same library behind the Unix `file` command — as a
+native Node addon, built for current Node.js.
 
 ```javascript
 const mmm = require('@vishalkumar14/mmmagic');

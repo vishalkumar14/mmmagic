@@ -47,14 +47,9 @@
     "mime",
     "mimetype"
   ],
-  "licenses": [
-    {
-      "type": "MIT",
-      "url": "http://github.com/previous-scope/mmmagic/raw/master/LICENSE"
-    }
-  ],
+  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "http://github.com/previous-scope/mmmagic.git"
+    "url": "git+https://github.com/vishalkumar14/mmmagic.git"
   }
 }
