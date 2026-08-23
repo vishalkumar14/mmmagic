@@ -35,3 +35,28 @@ Dockerfile  text eol=lf
 *.yml text
 *.md  text
 *.gyp text
+
+# --- Fixtures added with the Windows verification work ------------------------
+# Encoding/line-ending-sensitive CSV fixtures. These MUST be byte-exact: the
+# whole point of csv-crlf.csv is that it contains CRLF, and the eol=lf rule
+# above would rewrite it on checkout (1893 -> 1852 bytes), turning
+# "ASCII text, with CRLF line terminators" into plain "ASCII text" and leaving
+# the assertion passing while testing nothing. -text disables all conversion.
+test/fixtures/csv-crlf.csv      -text
+test/fixtures/csv-utf16.csv     -text
+test/fixtures/csv-utf8-bom.csv  -text
+
+# Remaining binary fixture types. Git's NUL-byte heuristic would usually get
+# these right, but the existing rules above are explicit and these should match.
+*.gif   binary
+*.bmp   binary
+*.tif   binary
+*.tiff  binary
+*.webp  binary
+*.ico   binary
+*.tar   binary
+*.docx  binary
+*.xlsx  binary
+*.pptx  binary
+*.ods   binary
+*.odt   binary
