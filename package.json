@@ -16,9 +16,10 @@
     "install": "node-gyp-build",
     "rebuild": "node-gyp rebuild",
     "prebuild": "prebuildify --napi --strip --tag-libc",
-    "test": "npm run test:upstream && npm run test:mime && npm run test:largefile && npm run test:worker",
+    "test": "npm run test:upstream && npm run test:mime && npm run test:promise && npm run test:largefile && npm run test:worker",
     "test:upstream": "node test/test.js",
     "test:mime": "node --test test/test-mime.js",
+    "test:promise": "node --test test/test-promise.js",
     "test:largefile": "node --test test/test-largefile.js",
     "test:worker": "node --test test/test-worker.js",
     "test:legacy": "node test/legacy-smoke.js"

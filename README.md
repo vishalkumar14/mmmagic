@@ -76,6 +76,46 @@ Install
     npm install mmmagic
 
 
+Promises / async-await
+======================
+
+Both `detectFile` and `detect` return a Promise when you omit the callback:
+
+```javascript
+  const mmm = require('@vishalkumar14/mmmagic');
+
+  const magic = new mmm.Magic(mmm.MAGIC_MIME_TYPE);
+  const type  = await magic.detectFile('/path/to/upload.csv');   // 'text/plain'
+```
+
+Errors reject, including argument-type errors:
+
+```javascript
+  try {
+    await magic.detectFile('/no/such/file');
+  } catch (err) {
+    // Error: cannot stat `/no/such/file' (No such file or directory)
+  }
+```
+
+Detections run concurrently, so `Promise.all` does what you would hope:
+
+```javascript
+  const types = await Promise.all(
+    files.map((f) => new mmm.Magic(mmm.MAGIC_MIME_TYPE).detectFile(f)));
+```
+
+**The callback form is unchanged** — pass a callback and you get exactly the old
+behaviour, including the return values (`detectFile` returns `undefined`,
+`detect` returns `this`). Nothing existing needs to be touched.
+
+**This did not make anything non-blocking; it already was.** Detection has
+always run on libuv's threadpool via `Napi::AsyncWorker`, never on the main
+thread. Promises change how the result reaches you, not when it happens or what
+it costs. There is a regression test that keeps a 1 ms interval running during
+six concurrent detections of a 34 MB file and asserts the event loop still
+ticks.
+
 Examples
 ========
 
