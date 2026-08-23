@@ -123,26 +123,52 @@ class DetectWorker : public Napi::AsyncWorker {
     const char* result = nullptr;
     if (input_.target_is_path) {
 #ifdef _WIN32
-      // Open the file ourselves so that non-ASCII paths work: the CRT's
-      // narrow-char open() uses the ANSI code page, which mangles them.
-      int fd = -1;
-      const int wlen = MultiByteToWideChar(CP_UTF8, 0, input_.target_path.c_str(),
-                                           -1, nullptr, 0);
-      if (wlen > 0) {
-        std::vector<wchar_t> wpath(static_cast<size_t>(wlen));
-        if (MultiByteToWideChar(CP_UTF8, 0, input_.target_path.c_str(), -1,
-                                wpath.data(), wlen) != 0) {
-          _wsopen_s(&fd, wpath.data(), O_RDONLY | O_BINARY, _SH_DENYNO, _S_IREAD);
+      // magic_file() takes a narrow path, which the CRT interprets in the
+      // ANSI code page -- that mangles non-ASCII names. For a pure-ASCII path
+      // the two encodings coincide, so prefer magic_file() there: it applies
+      // libmagic's stat-based layer (fsmagic) and so matches POSIX exactly,
+      // classifying an empty file as inode/x-empty and a directory as
+      // inode/directory.
+      //
+      // Only a non-ASCII path needs the wide-open + magic_descriptor()
+      // fallback below. magic_descriptor() cannot stat a path, so it loses
+      // that layer: an empty file comes back as application/x-empty and a
+      // directory cannot be opened at all. That residual difference is
+      // limited to non-ASCII paths.
+      bool ascii_only = true;
+      for (std::string::const_iterator it = input_.target_path.begin();
+           it != input_.target_path.end(); ++it) {
+        if (static_cast<unsigned char>(*it) >= 0x80) {
+          ascii_only = false;
+          break;
         }
       }
-      if (fd == -1) {
-        SetError("Error while opening file");
-        magic_close(magic);
-        return;
+
+      if (ascii_only) {
+        result = magic_file(magic, input_.target_path.c_str());
+      } else {
+        // Open the file ourselves so that non-ASCII paths work.
+        int fd = -1;
+        const int wlen = MultiByteToWideChar(CP_UTF8, 0,
+                                             input_.target_path.c_str(),
+                                             -1, nullptr, 0);
+        if (wlen > 0) {
+          std::vector<wchar_t> wpath(static_cast<size_t>(wlen));
+          if (MultiByteToWideChar(CP_UTF8, 0, input_.target_path.c_str(), -1,
+                                  wpath.data(), wlen) != 0) {
+            _wsopen_s(&fd, wpath.data(), O_RDONLY | O_BINARY, _SH_DENYNO,
+                      _S_IREAD);
+          }
+        }
+        if (fd == -1) {
+          SetError("Error while opening file");
+          magic_close(magic);
+          return;
+        }
+        result = magic_descriptor(magic, fd);
+        // magic_descriptor may leave the offset moved; we own the fd anyway.
+        _close(fd);
       }
-      result = magic_descriptor(magic, fd);
-      // magic_descriptor may leave the offset moved; we own the fd either way.
-      _close(fd);
 #else
       result = magic_file(magic, input_.target_path.c_str());
 #endif

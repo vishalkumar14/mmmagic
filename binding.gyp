@@ -9,7 +9,12 @@
       ],
       'include_dirs': [
         'deps/libmagic/src',
-        "<!@(node -p \"require('node-addon-api').include_dir\")",
+        # include_dir is a relative path using the platform separator. On
+        # Windows that separator is a backslash, which gyp consumes as an
+        # escape sequence: the 'n' of 'node-addon-api' is eaten and the path
+        # collapses to 'node_modulesnode-addon-api', so napi.h is never found.
+        # Normalising to forward slashes fixes Windows and is a no-op on POSIX.
+        "<!@(node -p \"require('node-addon-api').include_dir.split(require('path').sep).join('/')\")",
       ],
       'dependencies': [
         'deps/libmagic/libmagic.gyp:libmagic',
