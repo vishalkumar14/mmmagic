@@ -6,10 +6,10 @@
 // EVERY EXPECTATION HERE IS PINNED TO THE BUNDLED libmagic 5.32 (deps/libmagic).
 //
 // They are asserted strictly on purpose. libmagic 5.32 is from 2018, and it is
-// deliberately not upgraded because a newer libmagic
-// *changes return values that callers already depend on*. If you bump the
-// bundled version, these tests are designed to fail loudly rather than let the
-// change reach consumers silently. Known differences you would have to accept:
+// deliberately not upgraded, because a newer libmagic *changes return values
+// that callers already depend on*. If you bump the bundled version, these
+// tests are designed to fail loudly rather than let the change reach consumers
+// silently. Known differences you would have to accept:
 //
 //   * 5.35+  classifies JSON as application/json, not text/plain
 //   * 5.38+  classifies CSV  as text/csv,         not text/plain

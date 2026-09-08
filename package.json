@@ -32,8 +32,6 @@
     "prebuilds/",
     "binding.gyp",
     "README.md",
-    "the project notes",
-    "the project notes",
     "LICENSE"
   ],
   "engines": {

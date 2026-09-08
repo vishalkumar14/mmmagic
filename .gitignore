@@ -2,3 +2,8 @@ build
 node_modules
 .DS_Store
 prebuilds
+
+# Only the README is published from the repository root.
+# Any other root-level Markdown stays local.
+/*.md
+!/README.md

@@ -33,7 +33,6 @@ exactly what CSV upload validation needs.
 - [Requirements](#requirements-for-building-from-source)
 - [Versions](#whats-inside)
 - [Limitations](#limitations--known-issues)
-- [Other docs](#other-documents)
 
 ---
 
@@ -193,7 +192,7 @@ never consulted.
 ## What gets detected
 
 Every row below is asserted by the test suite against the bundled libmagic
-**5.32**. Newer libmagic returns different strings for some of these — see
+**5.32**. Newer libmagic returns different strings for some of these.
 
 ### Text
 
@@ -424,7 +423,6 @@ winget install --id Python.Python.3.12
 VS 2019 (16.11+) also works. Keep the checkout path short — MSVC still hits the
 260-character path limit; `C:\dev\...` is safe.
 
-
 ---
 
 ## What's inside
@@ -439,15 +437,13 @@ VS 2019 (16.11+) also works. Keep the checkout path short — MSVC still hits th
 | `prebuildify` | `^6.0.1` | dev only — builds the shipped binaries |
 | `node-gyp` | `^11.4.2` | dev only |
 
-No runtime dependency on `nan` — this fork was ported from NAN to Node-API
+No runtime dependency on `nan` — this fork was ported from NAN to Node-API.
 
 ### Why libmagic is still 5.32
 
 Upgrading to 5.48 **changes results callers depend on**: CSV becomes `text/csv`
 and JSON becomes `application/json`. Three backend upload validators compare
 against `'text/plain'` and would start rejecting every CSV.
-
-Full assessment, measured against real fixtures, plus the safe upgrade order:
 
 ---
 
@@ -527,13 +523,6 @@ docker run --rm mmmagic:node26
 
 PLATFORMS="linux/amd64 linux/arm64" ./scripts/matrix.sh
 ```
-
----
-
-## Other documents
-
-| Document | What it covers |
-|---|---|
 
 ---
 
