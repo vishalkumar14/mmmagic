@@ -365,3 +365,89 @@ typedef long int64_t;
 
 /* Define as `fork' if `vfork' does not work. */
 /* #undef vfork */
+
+/* ------------------------------------------------------------------------
+ * Added for libmagic 5.48.
+ *
+ * Upstream ships no MSVC support at all -- no msvc/ directory and no
+ * _MSC_VER references anywhere -- so every answer below is this fork's own
+ * decision rather than something configure worked out. Each one is settled
+ * on what the Microsoft C runtime actually provides, not by copying the
+ * generated Linux config.
+ * --------------------------------------------------------------------- */
+
+/* MSVC has <stdio.h>; autoconf 2.70+ probes for it explicitly. */
+#define HAVE_STDIO_H 1
+
+/* MSVC provides intptr_t in <stdint.h>. */
+#define HAVE_INTPTR_T 1
+
+/* MSVC provides uintptr_t in <stdint.h>. */
+#define HAVE_UINTPTR_T 1
+
+/* Compression back ends. Deliberately disabled -- the addon links none of
+   these, and enabling any would pull in an external library node-gyp does
+   not provide. Matches the POSIX configs. */
+/* #undef BZLIBSUPPORT */
+/* #undef ZLIBSUPPORT */
+/* #undef XZLIBSUPPORT */
+/* #undef ZSTDLIBSUPPORT */
+/* #undef LZLIBSUPPORT */
+/* #undef LRZIPLIBSUPPORT */
+/* #undef HAVE_LIBZ */
+/* #undef HAVE_ZLIB_H */
+/* #undef HAVE_LIBBZ2 */
+/* #undef HAVE_BZLIB_H */
+/* #undef HAVE_LIBLZMA */
+/* #undef HAVE_LZMA_H */
+/* #undef HAVE_LIBZSTD */
+/* #undef HAVE_ZSTD_H */
+/* #undef HAVE_ZSTD_ERRORS_H */
+/* #undef HAVE_LIBLZ */
+/* #undef HAVE_LZLIB_H */
+/* #undef HAVE_LIBLRZIP */
+/* #undef HAVE_LRZIP_H */
+
+/* Linux sandboxing. seccomp.c and landlock.c are not vendored at all. */
+/* #undef HAVE_LIBSECCOMP */
+/* #undef HAVE_LINUX_LANDLOCK_H */
+
+/* POSIX process and pipe APIs. Windows has none of these. */
+/* #undef HAVE_SPAWN_H */
+/* #undef HAVE_POSIX_SPAWNP */
+/* #undef HAVE_VFORK_H */
+/* #undef HAVE_PIPE2 */
+
+/* POSIX per-thread locales. MSVC spells these _create_locale/_free_locale. */
+/* #undef HAVE_XLOCALE_H */
+/* #undef HAVE_NEWLOCALE */
+/* #undef HAVE_FREELOCALE */
+/* #undef HAVE_USELOCALE */
+
+/* Reentrant time functions. src/gmtime_r.c and src/localtime_r.c are
+   compiled on Windows to supply these instead. */
+/* #undef HAVE_GMTIME_R */
+/* #undef HAVE_LOCALTIME_R */
+
+/* Headers and functions MSVC does not ship. */
+/* #undef HAVE_BYTESWAP_H */
+/* #undef HAVE_SYS_BSWAP_H */
+/* #undef HAVE_SYS_IOCTL_H */
+/* #undef HAVE_SYS_SYSMACROS_H */
+/* #undef HAVE_MINIX_CONFIG_H */
+/* #undef HAVE_MEMMEM */
+/* #undef HAVE_SIG_T */
+
+/* src/fmtcheck.c is compiled on Windows, so the system one is not used. */
+/* #undef HAVE_FMTCHECK */
+
+/* Not applicable: Apple universal builds, 64-bit time_t opt-in on 32-bit
+   glibc, a MinGW compatibility toggle, and the Solaris 2.5.1 typedef
+   guards. Left undefined exactly as the POSIX configs leave them. */
+/* #undef AC_APPLE_UNIVERSAL_BUILD */
+/* #undef _TIME_BITS */
+/* #undef __MINGW_USE_VC2005_COMPAT */
+/* #undef _UINT8_T */
+/* #undef _UINT32_T */
+/* #undef _UINT64_T */
+
