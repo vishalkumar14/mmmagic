@@ -1,6 +1,6 @@
 {
   "name": "@vishalkumar14/mmmagic",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "author": "Vishal Kumar",
   "description": "An async libmagic binding for node.js for detecting content types by data inspection",
   "main": "./lib/index",
@@ -32,6 +32,7 @@
     "prebuilds/",
     "binding.gyp",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {
