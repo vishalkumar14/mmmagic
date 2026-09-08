@@ -116,7 +116,11 @@ jobs:
         with: { python-version: '3.12' }
       - run: npm install --ignore-scripts
       - run: npx prebuildify --napi --strip
-      - run: npx prebuildify --napi --strip --arch ia32
+      # Node 24 and 26 publish no 32-bit Windows build, so win-x86/node.lib
+      # only exists up to Node 22 and the default target 404s. Pin the target
+      # to 22.11.0 (LTS); Node-API keeps the resulting binary loadable on
+      # every Node that still has a 32-bit build.
+      - run: npx prebuildify --napi --strip --arch ia32 --target 22.11.0
       - uses: actions/upload-artifact@v4
         with: { name: prebuilds-win32, path: prebuilds/ }
 
