@@ -526,7 +526,15 @@ PLATFORMS="linux/amd64 linux/arm64" ./scripts/matrix.sh
 
 ---
 
+## Credits
+
+Derived from **mmmagic 0.5.5** by Brian White (mscdex), by way of the
+`@picturae/mmmagic` fork. The C++ addon and the JavaScript surface started as
+theirs; this package carries the port to Node-API, prebuilt binaries, Promise
+support and the Windows fixes on top.
+
 ## License
 
-MIT. libmagic in `deps/libmagic` carries its own BSD-style license
+MIT, and the original copyright is retained in [LICENSE](LICENSE) as that
+licence requires. libmagic in `deps/libmagic` carries its own BSD-style licence
 (`deps/libmagic/COPYING`).
