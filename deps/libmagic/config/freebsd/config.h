@@ -34,7 +34,7 @@
 #define HAVE_ERR_H 1
 
 /* Define to 1 if you have the <dirent.h> header file. */
-#define HAVE_DIRENT_H 1
+/* #undef HAVE_DIRENT_H */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if you have the <fcntl.h> header file. */
 #define HAVE_FCNTL_H 1
@@ -73,7 +73,7 @@
 #define HAVE_LIMITS_H 1
 
 /* Define to 1 if you have the <locale.h> header file. */
-#define HAVE_LOCALE_H 1
+/* #undef HAVE_LOCALE_H */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if mbrtowc and mbstate_t are properly declared. */
 #define HAVE_MBRTOWC 1
@@ -82,7 +82,7 @@
 #define HAVE_MBSTATE_T 1
 
 /* Define to 1 if you have the <memory.h> header file. */
-#define HAVE_MEMORY_H 1
+/* #undef HAVE_MEMORY_H */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if you have the `mkostemp' function. */
 /* #undef HAVE_MKOSTEMP */
@@ -97,10 +97,10 @@
 #define HAVE_PREAD 1
 
 /* Define to 1 if you have the <stddef.h> header file. */
-#define HAVE_STDDEF_H 1
+/* #undef HAVE_STDDEF_H */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if the system has the type `pid_t'. */
-#define HAVE_PID_T 1
+/* #undef HAVE_PID_T */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #define HAVE_STDINT_H 1
@@ -112,7 +112,7 @@
 #define HAVE_STRCASESTR 1
 
 /* Define to 1 if you have the `strerror' function. */
-#define HAVE_STRERROR 1
+/* #undef HAVE_STRERROR */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if you have the <strings.h> header file. */
 #define HAVE_STRINGS_H 1
@@ -133,7 +133,7 @@
 #define HAVE_STRTOF 1
 
 /* Define to 1 if you have the `strtoul' function. */
-#define HAVE_STRTOUL 1
+/* #undef HAVE_STRTOUL */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* HAVE_STRUCT_OPTION */
 #define HAVE_STRUCT_OPTION 1
@@ -178,22 +178,22 @@
 #define HAVE_TZNAME 1
 
 /* Define to 1 if the system has the type `int32_t'. */
-#define HAVE_INT32_T 1
+/* #undef HAVE_INT32_T */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if the system has the type `int64_t'. */
-#define HAVE_INT64_T 1
+/* #undef HAVE_INT64_T */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if the system has the type `uint16_t'. */
-#define HAVE_UINT16_T 1
+/* #undef HAVE_UINT16_T */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if the system has the type `uint32_t'. */
-#define HAVE_UINT32_T 1
+/* #undef HAVE_UINT32_T */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if the system has the type `uint64_t'. */
-#define HAVE_UINT64_T 1
+/* #undef HAVE_UINT64_T */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if the system has the type `uint8_t'. */
-#define HAVE_UINT8_T 1
+/* #undef HAVE_UINT8_T */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if you have the <unistd.h> header file. */
 #define HAVE_UNISTD_H 1
@@ -272,7 +272,7 @@
 #undef PACKAGE_VERSION
 
 /* The size of `long long', as computed by sizeof. */
-#define SIZEOF_LONG_LONG 8
+/* #undef SIZEOF_LONG_LONG */  /* dropped by autoconf 2.70+; unused in 5.48 */
 
 /* Define to 1 if you have the ANSI C header files. */
 #define STDC_HEADERS 1
@@ -363,3 +363,22 @@ typedef long int64_t;
 
 /* Define as `fork' if `vfork' does not work. */
 /* #undef vfork */
+
+/* ---- Added for libmagic 5.48 -----------------------------------------
+ * UNVERIFIED. No FreeBSD/OpenBSD/SunOS machine or CI runner exists for
+ * this package -- binaries ship for darwin, linux and win32 only -- so
+ * these are reasoned from each platform's documented behaviour, not from
+ * a configure run. A wrong answer here surfaces as a build failure for
+ * someone compiling from source on that platform.
+ *
+ * Linux-only symbols 5.48 added (byteswap.h, landlock, sysmacros) are
+ * deliberately NOT propagated here.
+ * ------------------------------------------------------------------- */
+
+#define HAVE_STDIO_H 1
+#define HAVE_SYS_IOCTL_H 1
+#define HAVE_SPAWN_H 1
+#define HAVE_POSIX_SPAWNP 1
+#define HAVE_MEMMEM 1
+#define HAVE_PIPE2 1
+
