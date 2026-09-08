@@ -479,11 +479,26 @@ typedef int ssize_t;
 #  endif
 # endif
 
-/* fsmagic.c assigns S_IFIFO when GetFileType() reports a pipe. MSVC only
- * spells it with the leading underscore. */
+/* File-type bits. MSVC's <sys/stat.h> carries only _S_IFMT, _S_IFDIR,
+ * _S_IFCHR, _S_IFIFO and _S_IFREG, all with POSIX values.
+ *
+ * S_IFIFO: fsmagic.c assigns it when GetFileType() reports a pipe.
+ * S_IFBLK: fsmagic.c:143 and magic.c:472 assign it unguarded inside their
+ *   own #ifdef WIN32 blocks -- "stat failed but the handle opened, so assume
+ *   a block device". Upstream only exercises those paths under MinGW, whose
+ *   headers define it. 0060000 is the POSIX value and does not collide with
+ *   the bits MSVC already defines.
+ *
+ * S_IFLNK, S_IFSOCK, S_ISUID, S_ISGID and S_ISVTX are deliberately left
+ * undefined. Every use of them is behind #ifdef, and defining them would
+ * unguard code that calls lstat(), readlink() and friends -- none of which
+ * MSVC has. Absent is the correct answer, not a gap. */
 # include <sys/stat.h>
 # ifndef S_IFIFO
 #  define S_IFIFO _S_IFIFO
+# endif
+# ifndef S_IFBLK
+#  define S_IFBLK 0060000
 # endif
 
 /* Standard descriptor numbers. compress.c uses STDIN_FILENO but only includes
