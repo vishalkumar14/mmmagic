@@ -23,7 +23,7 @@ const fixture = (f) => path.join(FIXTURES, f);
 
 const CASES = [
   ['text.txt', 'text/plain'],
-  ['csv.csv',  'text/plain'],
+  ['csv.csv',  'text/csv'],
   ['png.png',  'image/png'],
   ['jpg.jpg',  'image/jpeg'],
   ['zip.zip',  'application/zip'],
@@ -195,7 +195,7 @@ test('the main thread is not blocked while detection runs',
     try {
       const results = await Promise.all(Array.from({ length: 6 },
         () => new mmm.Magic(mmm.MAGIC_MIME_TYPE).detectFile(big)));
-      assert.deepStrictEqual(results, Array(6).fill('text/plain'));
+      assert.deepStrictEqual(results, Array(6).fill('text/csv'));
     } finally {
       clearInterval(iv);
     }

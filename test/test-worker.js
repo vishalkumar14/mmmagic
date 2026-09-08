@@ -64,7 +64,7 @@ test('main thread and worker agree on the same file', async () => {
 
   const workerOut = await inWorker(DETECT_IN_WORKER, { entry, file });
 
-  assert.strictEqual(mainResult, 'text/plain');
+  assert.strictEqual(mainResult, 'text/csv');
   assert.strictEqual(workerOut.result, mainResult);
 });
 
@@ -78,7 +78,7 @@ test('several workers can use the addon concurrently', async () => {
     ['zip.zip', 'application/zip'],
     ['pdf.pdf', 'application/pdf'],
     ['text.txt', 'text/plain'],
-    ['csv.csv', 'text/plain'],
+    ['csv.csv', 'text/csv'],
   ];
 
   const results = await Promise.all(cases.map(([file]) =>
