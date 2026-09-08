@@ -524,6 +524,39 @@ typedef int ssize_t;
 #  define STDERR_FILENO 2
 # endif
 
+/* The S_IS*() type-test macros. POSIX defines these as macros, not functions;
+ * MSVC ships none of them, so the compiler treated each use as an implicit
+ * function call and the link failed with unresolved externals for S_ISREG and
+ * S_ISFIFO. Standard definitions, in terms of bits MSVC does provide. */
+# ifndef S_ISREG
+#  define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
+# endif
+# ifndef S_ISDIR
+#  define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
+# endif
+# ifndef S_ISFIFO
+#  define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
+# endif
+# ifndef S_ISCHR
+#  define S_ISCHR(m)  (((m) & S_IFMT) == S_IFCHR)
+# endif
+# ifndef S_ISBLK
+#  define S_ISBLK(m)  (((m) & S_IFMT) == S_IFBLK)
+# endif
+
+/* pipe(). funcs.c:file_pipe_closexec() special-cases Windows with
+ * #ifdef __MINGW32__ only, so an MSVC build falls through to the POSIX
+ * branch and calls pipe(), which does not exist here. The CRT's _pipe()
+ * does the same job but takes a buffer size and a mode, so it needs a
+ * wrapper rather than a macro alias. */
+# include <fcntl.h>
+# ifndef MMMAGIC_HAVE_PIPE_WRAPPER
+#  define MMMAGIC_HAVE_PIPE_WRAPPER 1
+static __inline int pipe(int fds[2]) {
+	return _pipe(fds, 4096, _O_BINARY);
+}
+# endif
+
 /* access() mode bits. Windows has no execute permission to test, so X_OK is
  * folded into a plain existence check, which is what the CRT does anyway. */
 # include <io.h>
