@@ -199,7 +199,12 @@
 #undef HAVE_UNISTD_H
 
 /* Define to 1 if you have the `utime' function. */
-#undef HAVE_UTIME
+/* MSVC has utime() and struct utimbuf in <sys/utime.h>, which HAVE_SYS_UTIME_H
+   above already asserts. This must be defined too: magic.c gates the *include*
+   on HAVE_UTIME && HAVE_SYS_UTIME_H but gates the *use* of struct utimbuf on
+   HAVE_UTIME_H || HAVE_SYS_UTIME_H, so with only the latter set the header is
+   never included and the struct is undefined at the point of use. */
+#define HAVE_UTIME 1
 
 /* Define to 1 if you have the `utimes' function. */
 #undef HAVE_UTIMES
