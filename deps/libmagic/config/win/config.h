@@ -549,7 +549,8 @@ typedef int ssize_t;
  * branch and calls pipe(), which does not exist here. The CRT's _pipe()
  * does the same job but takes a buffer size and a mode, so it needs a
  * wrapper rather than a macro alias. */
-# include <fcntl.h>
+# include <io.h>      /* _pipe */
+# include <fcntl.h>   /* _O_BINARY */
 # ifndef MMMAGIC_HAVE_PIPE_WRAPPER
 #  define MMMAGIC_HAVE_PIPE_WRAPPER 1
 static __inline int pipe(int fds[2]) {
@@ -559,7 +560,6 @@ static __inline int pipe(int fds[2]) {
 
 /* access() mode bits. Windows has no execute permission to test, so X_OK is
  * folded into a plain existence check, which is what the CRT does anyway. */
-# include <io.h>
 # ifndef F_OK
 #  define F_OK 0
 # endif
