@@ -49,9 +49,14 @@
           },
         }],
         ['OS=="win"', {
+          # binding.cc includes libmagic's magic.h, which declares ssize_t in
+          # its API. MSVC has no such type by default, so this target needs the
+          # same forced config.h and include path the libmagic target uses.
+          'include_dirs': [ 'deps/libmagic/config/win' ],
           'msvs_settings': {
             'VCCLCompilerTool': {
               'AdditionalOptions': [ '/std:c++20' ],
+              'ForcedIncludeFiles': [ 'config.h' ],
             },
           },
         }],

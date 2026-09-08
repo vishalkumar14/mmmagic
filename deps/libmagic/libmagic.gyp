@@ -27,6 +27,16 @@
             'msvc/libgnurx-2.5/regex.c',
           ],
           'include_dirs': [ 'config/win', 'msvc', 'msvc/libgnurx-2.5' ],
+          # Force config.h in ahead of everything. libmagic's public magic.h
+          # declares `ssize_t magic_getmaxparam(int)` (new in 5.48) but only
+          # includes <sys/types.h>, which does not define ssize_t on MSVC. Our
+          # typedef lives in config/win/config.h, and nothing guarantees that
+          # header is reached first otherwise.
+          'msvs_settings': {
+            'VCCLCompilerTool': {
+              'ForcedIncludeFiles': [ 'config.h' ],
+            },
+          },
           'link_settings': {
             'libraries': [
               '-lshlwapi.lib',
