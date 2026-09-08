@@ -486,6 +486,24 @@ typedef int ssize_t;
 #  define S_IFIFO _S_IFIFO
 # endif
 
+/* Standard descriptor numbers. compress.c uses STDIN_FILENO but only includes
+ * <unistd.h> under HAVE_UNISTD_H, which is correctly undefined here -- so the
+ * msvc/unistd.h shim never reaches it. magic.c carries its own fallback;
+ * compress.c does not. Defining them here covers every file unconditionally.
+ *
+ * HAVE_UNISTD_H is deliberately NOT set instead: the shim supplies the types
+ * and descriptor numbers libmagic needs, but not fork, pipe or the rest of
+ * POSIX, and claiming the header exists would unguard code that wants those. */
+# ifndef STDIN_FILENO
+#  define STDIN_FILENO  0
+# endif
+# ifndef STDOUT_FILENO
+#  define STDOUT_FILENO 1
+# endif
+# ifndef STDERR_FILENO
+#  define STDERR_FILENO 2
+# endif
+
 /* access() mode bits. Windows has no execute permission to test, so X_OK is
  * folded into a plain existence check, which is what the CRT does anyway. */
 # include <io.h>
