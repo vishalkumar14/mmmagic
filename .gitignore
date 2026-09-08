@@ -7,3 +7,6 @@ prebuilds
 # Any other root-level Markdown stays local.
 /*.md
 !/README.md
+
+# Design specs and implementation plans - local working documents.
+/docs/superpowers/
