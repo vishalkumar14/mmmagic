@@ -25,5 +25,36 @@ IN THE SOFTWARE.
 
 ---
 
-libmagic, vendored under deps/libmagic, carries its own BSD-style license.
-See deps/libmagic/COPYING.
+THIRD-PARTY COMPONENTS
+
+This package vendors third-party source under deps/. Their licenses are
+reproduced in full alongside the code and are summarised here.
+
+1. libmagic  --  BSD-2-Clause
+   Path:    deps/libmagic
+   License: deps/libmagic/COPYING
+   Copyright (c) Ian F. Darwin 1986-1995; maintained 1994- Christos Zoulas.
+   Compiled into the addon on every platform.
+
+2. libgnurx (GNU C Library regex port)  --  LGPL-2.1-or-later
+   Path:    deps/libmagic/msvc/libgnurx-2.5
+   License: deps/libmagic/msvc/libgnurx-2.5/COPYING.LIB
+   Copyright (C) 2002, 2003, 2005 Free Software Foundation, Inc.
+
+   *** This is the only copyleft component in the package. ***
+
+   It supplies POSIX regex, which the Microsoft C runtime does not provide.
+   It is therefore compiled ONLY into the Windows binaries -- win32-x64,
+   win32-ia32 and win32-arm64. The macOS and Linux binaries use the system
+   regex and contain no LGPL code whatsoever.
+
+   LGPL-2.1 section 6 requires that a user linking this library statically
+   be able to relink the work with a modified version of it. This package
+   satisfies that: the complete, unmodified libgnurx source ships in the
+   npm tarball together with the addon source (src/), the rest of libmagic
+   (deps/) and the build definition (binding.gyp), so the Windows binary
+   can be rebuilt from source against a modified libgnurx with:
+
+       npm rebuild @vishalkumar14/mmmagic
+
+   No part of this package has been modified from upstream libgnurx.

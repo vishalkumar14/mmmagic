@@ -535,6 +535,23 @@ support and the Windows fixes on top.
 
 ## License
 
-MIT, and the original copyright is retained in [LICENSE](LICENSE) as that
-licence requires. libmagic in `deps/libmagic` carries its own BSD-style licence
-(`deps/libmagic/COPYING`).
+This package is **MIT**, and the original copyright is retained in
+[LICENSE](LICENSE) as that licence requires.
+
+It vendors two third-party components, both with their full licence text
+included:
+
+| Component | Licence | Applies to |
+|---|---|---|
+| libmagic (`deps/libmagic`) | BSD-2-Clause | every platform |
+| libgnurx (`deps/libmagic/msvc/libgnurx-2.5`) | **LGPL-2.1-or-later** | **Windows binaries only** |
+
+libgnurx supplies POSIX regex, which the Microsoft C runtime lacks, so it is
+compiled only into `win32-x64`, `win32-ia32` and `win32-arm64`. **The macOS and
+Linux binaries contain no LGPL code.**
+
+If your organisation restricts copyleft dependencies, that distinction is
+usually the one that matters. The complete libgnurx source ships in the tarball
+unmodified, so the Windows binary can be relinked against a modified copy with
+`npm rebuild @vishalkumar14/mmmagic`, satisfying LGPL-2.1 §6. Full details in
+[LICENSE](LICENSE).
