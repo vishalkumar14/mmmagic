@@ -3,10 +3,11 @@ node_modules
 .DS_Store
 prebuilds
 
-# Only the README is published from the repository root.
+# Only the README and CHANGELOG are published from the repository root.
 # Any other root-level Markdown stays local.
 /*.md
 !/README.md
+!/CHANGELOG.md
 
 # Design specs and implementation plans - local working documents.
 /docs/superpowers/
