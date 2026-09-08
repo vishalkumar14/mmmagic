@@ -25,34 +25,77 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+/*
+ * apprentice - make one pass through /etc/magic, learning its secrets.
+ */
+
 #include "file.h"
 
 #ifndef	lint
-FILE_RCSID("@(#)$File: dprintf.c,v 1.4 2022/09/24 20:30:13 christos Exp $")
+FILE_RCSID("@(#)$File: swap.c,v 1.1 2026/04/19 19:56:49 christos Exp $")
 #endif	/* lint */
 
-#include <assert.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <stdarg.h>
+#include "swap.h"
 
-int
-dprintf(int fd, const char *fmt, ...)
+#if !defined(HAVE_BYTESWAP_H) && !defined(HAVE_SYS_BSWAP_H)
+/*
+ * swap a short
+ */
+file_protected uint16_t
+file_swap2(uint16_t sv)
 {
-	va_list ap;
-	/* Simpler than using vasprintf() here, since we never need more */
-	char buf[1024];
-	int len;
-
-	va_start(ap, fmt);
-	len = vsnprintf(buf, sizeof(buf), fmt, ap);
-	va_end(ap);
-
-	if ((size_t)len >= sizeof(buf))
-		return -1;
-
-	if (write(fd, buf, (size_t)len) != len)
-		return -1;
-
-	return len;
+	uint16_t rv;
+	uint8_t *s = RCAST(uint8_t *, RCAST(void *, &sv));
+	uint8_t *d = RCAST(uint8_t *, RCAST(void *, &rv));
+	d[0] = s[1];
+	d[1] = s[0];
+	return rv;
 }
+
+/*
+ * swap an int
+ */
+file_protected uint32_t
+file_swap4(uint32_t sv)
+{
+	uint32_t rv;
+	uint8_t *s = RCAST(uint8_t *, RCAST(void *, &sv));
+	uint8_t *d = RCAST(uint8_t *, RCAST(void *, &rv));
+	d[0] = s[3];
+	d[1] = s[2];
+	d[2] = s[1];
+	d[3] = s[0];
+	return rv;
+}
+
+/*
+ * swap a quad
+ */
+file_protected uint64_t
+file_swap8(uint64_t sv)
+{
+	uint64_t rv;
+	uint8_t *s = RCAST(uint8_t *, RCAST(void *, &sv));
+	uint8_t *d = RCAST(uint8_t *, RCAST(void *, &rv));
+# if 0
+	d[0] = s[3];
+	d[1] = s[2];
+	d[2] = s[1];
+	d[3] = s[0];
+	d[4] = s[7];
+	d[5] = s[6];
+	d[6] = s[5];
+	d[7] = s[4];
+# else
+	d[0] = s[7];
+	d[1] = s[6];
+	d[2] = s[5];
+	d[3] = s[4];
+	d[4] = s[3];
+	d[5] = s[2];
+	d[6] = s[1];
+	d[7] = s[0];
+# endif
+	return rv;
+}
+#endif

@@ -1,15 +1,15 @@
 /*
  * Adapted from: apptype.c, Written by Eberhard Mattes and put into the
- * public domain
- * 
+ * file_public domain
+ *
  * Notes: 1. Qualify the filename so that DosQueryAppType does not do extraneous
  * searches.
- * 
+ *
  * 2. DosQueryAppType will return FAPPTYP_DOS on a file ending with ".com"
  * (other than an OS/2 exe or Win exe with this name). Eberhard Mattes
  * remarks Tue, 6 Apr 93: Moreover, it reports the type of the (new and very
  * bug ridden) Win Emacs as "OS/2 executable".
- * 
+ *
  * 3. apptype() uses the filename if given, otherwise a tmp file is created with
  * the contents of buf. If buf is not the complete file, apptype can
  * incorrectly identify the exe type. The "-z" option of "file" is the reason
@@ -18,16 +18,16 @@
 
 /*
  * amai: Darrel Hankerson did the changes described here.
- * 
+ *
  * It remains to check the validity of comments (2.) since it's referred to an
  * "old" OS/2 version.
- * 
+ *
  */
 
 #include "file.h"
 
 #ifndef	lint
-FILE_RCSID("@(#)$File: apptype.c,v 1.13 2011/09/07 21:57:15 christos Exp $")
+FILE_RCSID("@(#)$File: apptype.c,v 1.18 2024/12/08 18:59:04 christos Exp $")
 #endif /* lint */
 
 #include <stdlib.h>
@@ -41,9 +41,8 @@ FILE_RCSID("@(#)$File: apptype.c,v 1.13 2011/09/07 21:57:15 christos Exp $")
 #include <os2.h>
 typedef ULONG   APPTYPE;
 
-protected int
-file_os2_apptype(struct magic_set *ms, const char *fn, const void *buf,
-    size_t nb)
+file_protected int
+file_os2_apptype(struct magic_set *ms, const char *fn, const struct buffer *b)
 {
 	APPTYPE         rc, type;
 	char            path[_MAX_PATH], drive[_MAX_DRIVE], dir[_MAX_DIR],
@@ -69,7 +68,7 @@ file_os2_apptype(struct magic_set *ms, const char *fn, const void *buf,
 			file_error(ms, errno, "cannot open tmp file `%s'", path);
 			return -1;
 		}
-		if (fwrite(buf, 1, nb, fp) != nb) {
+		if (fwrite(b->fbuf, 1, b->flen, fp) != b->flen) {
 			file_error(ms, errno, "cannot write tmp file `%s'",
 			    path);
 			(void)fclose(fp);
@@ -116,7 +115,7 @@ file_os2_apptype(struct magic_set *ms, const char *fn, const void *buf,
 			return -1;
 	} else if (type & FAPPTYP_DLL) {
 		if (type & FAPPTYP_PROTDLL)
-			if (file_printf(ms, "protected ") == -1)
+			if (file_printf(ms, "file_protected ") == -1)
 				return -1;
 		if (file_printf(ms, "DLL") == -1)
 			return -1;
@@ -129,7 +128,7 @@ file_os2_apptype(struct magic_set *ms, const char *fn, const void *buf,
 		 * ".com".
 		 */
 		if (stricmp(ext, ".com") == 0)
-			if (strncmp((const char *)buf, "MZ", 2))
+			if (strncmp((const char *)b->fbuf, "MZ", 2))
 				return (0);
 		if (file_printf(ms, "DOS executable") == -1)
 			return -1;
