@@ -451,3 +451,55 @@ typedef long int64_t;
 /* #undef _UINT32_T */
 /* #undef _UINT64_T */
 
+/* ------------------------------------------------------------------------
+ * MSVC type and macro accommodations.
+ *
+ * Up to 5.32 these lived as edits inside deps/libmagic/src/file.h, marked
+ * "XXX: local change to vendored libmagic". They are here now because this
+ * file belongs to the fork and survives a vendor refresh untouched, whereas
+ * patches to upstream sources are silently lost the moment those sources are
+ * replaced -- which is exactly what happened going to 5.48.
+ *
+ * config.h is included at the top of file.h, before any declaration that
+ * needs these, so defining them here reaches every translation unit.
+ * --------------------------------------------------------------------- */
+
+#ifdef _MSC_VER
+
+/* The Microsoft CRT has neither of these. size_t is deliberately NOT
+ * typedef'd -- MSVC provides it in <stddef.h> and redefining it conflicts. */
+typedef unsigned int mode_t;
+
+# ifndef _SSIZE_T_DEFINED
+#  define _SSIZE_T_DEFINED
+#  ifdef _WIN64
+typedef __int64 ssize_t;
+#  else
+typedef int ssize_t;
+#  endif
+# endif
+
+/* fsmagic.c assigns S_IFIFO when GetFileType() reports a pipe. MSVC only
+ * spells it with the leading underscore. */
+# include <sys/stat.h>
+# ifndef S_IFIFO
+#  define S_IFIFO _S_IFIFO
+# endif
+
+/* access() mode bits. Windows has no execute permission to test, so X_OK is
+ * folded into a plain existence check, which is what the CRT does anyway. */
+# include <io.h>
+# ifndef F_OK
+#  define F_OK 0
+# endif
+# ifndef X_OK
+#  define X_OK 1
+# endif
+# ifndef W_OK
+#  define W_OK 2
+# endif
+# ifndef R_OK
+#  define R_OK 4
+# endif
+
+#endif /* _MSC_VER */
