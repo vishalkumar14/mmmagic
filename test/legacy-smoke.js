@@ -38,8 +38,8 @@ function check(name, actual, expected) {
 
 var CASES = [
   ['text.txt', 'text/plain', 'us-ascii'],
-  ['csv.csv', 'text/plain', 'us-ascii'],
-  ['json.json', 'text/plain', 'us-ascii'],
+  ['csv.csv', 'text/csv', 'us-ascii'],
+  ['json.json', 'application/json', 'us-ascii'],
   ['xml.xml', 'text/xml', 'us-ascii'],
   ['pdf.pdf', 'application/pdf', 'us-ascii'],
   ['png.png', 'image/png', 'binary'],
@@ -137,7 +137,7 @@ function step6() {
       var ms = Date.now() - t0;
       try { fs.unlinkSync(tmp); } catch (e) {}
       checks++;
-      var okMime = !err && res === 'text/plain';
+      var okMime = !err && res === 'text/csv';
       var okMem = grew < 32;
       if (okMime && okMem) {
         console.log('    ok   ' + sizeMb.toFixed(1) + ' MB | RSS +' +

@@ -23,7 +23,7 @@ const fixture = (f) => path.join(FIXTURES, f);
 
 const CASES = [
   ['text.txt', 'text/plain'],
-  ['csv.csv',  'text/plain'],
+  ['csv.csv',  'text/csv'],
   ['png.png',  'image/png'],
   ['jpg.jpg',  'image/jpeg'],
   ['zip.zip',  'application/zip'],
@@ -154,10 +154,22 @@ test('instanceof still identifies a Magic', () => {
   assert.ok(new mmm.Magic(mmm.MAGIC_MIME_TYPE) instanceof mmm.Magic);
 });
 
-test('all 20 MAGIC_* constants are still exported', () => {
+test('all 23 MAGIC_* constants are still exported', () => {
   const names = Object.keys(mmm).filter((k) => k.startsWith('MAGIC_'));
-  assert.strictEqual(names.length, 20);
+  assert.strictEqual(names.length, 23);
   assert.strictEqual(mmm.MAGIC_MIME, mmm.MAGIC_MIME_TYPE | mmm.MAGIC_MIME_ENCODING);
+  // Added in libmagic 5.48 alongside the parsers they switch off.
+  for (const n of ['MAGIC_NO_CHECK_CSV', 'MAGIC_NO_CHECK_JSON', 'MAGIC_NO_CHECK_SIMH']) {
+    assert.strictEqual(typeof mmm[n], 'number', `${n} should be exported`);
+  }
+});
+
+test('MAGIC_NO_CHECK_CSV returns the pre-5.48 answer for a CSV', async () => {
+  // The documented migration path for callers still comparing to text/plain.
+  const on = new mmm.Magic(mmm.MAGIC_MIME_TYPE);
+  const off = new mmm.Magic(mmm.MAGIC_MIME_TYPE | mmm.MAGIC_NO_CHECK_CSV);
+  assert.strictEqual(await on.detectFile(fixture('csv.csv')), 'text/csv');
+  assert.strictEqual(await off.detectFile(fixture('csv.csv')), 'text/plain');
 });
 
 // --- concurrency and non-blocking ------------------------------------------
@@ -183,7 +195,7 @@ test('the main thread is not blocked while detection runs',
     try {
       const results = await Promise.all(Array.from({ length: 6 },
         () => new mmm.Magic(mmm.MAGIC_MIME_TYPE).detectFile(big)));
-      assert.deepStrictEqual(results, Array(6).fill('text/plain'));
+      assert.deepStrictEqual(results, Array(6).fill('text/csv'));
     } finally {
       clearInterval(iv);
     }

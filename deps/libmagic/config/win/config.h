@@ -199,7 +199,12 @@
 #undef HAVE_UNISTD_H
 
 /* Define to 1 if you have the `utime' function. */
-#undef HAVE_UTIME
+/* MSVC has utime() and struct utimbuf in <sys/utime.h>, which HAVE_SYS_UTIME_H
+   above already asserts. This must be defined too: magic.c gates the *include*
+   on HAVE_UTIME && HAVE_SYS_UTIME_H but gates the *use* of struct utimbuf on
+   HAVE_UTIME_H || HAVE_SYS_UTIME_H, so with only the latter set the header is
+   never included and the struct is undefined at the point of use. */
+#define HAVE_UTIME 1
 
 /* Define to 1 if you have the `utimes' function. */
 #undef HAVE_UTIMES
@@ -365,3 +370,207 @@ typedef long int64_t;
 
 /* Define as `fork' if `vfork' does not work. */
 /* #undef vfork */
+
+/* ------------------------------------------------------------------------
+ * Added for libmagic 5.48.
+ *
+ * Upstream ships no MSVC support at all -- no msvc/ directory and no
+ * _MSC_VER references anywhere -- so every answer below is this fork's own
+ * decision rather than something configure worked out. Each one is settled
+ * on what the Microsoft C runtime actually provides, not by copying the
+ * generated Linux config.
+ * --------------------------------------------------------------------- */
+
+/* MSVC has <stdio.h>; autoconf 2.70+ probes for it explicitly. */
+#define HAVE_STDIO_H 1
+
+/* MSVC provides intptr_t in <stdint.h>. */
+#define HAVE_INTPTR_T 1
+
+/* MSVC provides uintptr_t in <stdint.h>. */
+#define HAVE_UINTPTR_T 1
+
+/* Compression back ends. Deliberately disabled -- the addon links none of
+   these, and enabling any would pull in an external library node-gyp does
+   not provide. Matches the POSIX configs. */
+/* #undef BZLIBSUPPORT */
+/* #undef ZLIBSUPPORT */
+/* #undef XZLIBSUPPORT */
+/* #undef ZSTDLIBSUPPORT */
+/* #undef LZLIBSUPPORT */
+/* #undef LRZIPLIBSUPPORT */
+/* #undef HAVE_LIBZ */
+/* #undef HAVE_ZLIB_H */
+/* #undef HAVE_LIBBZ2 */
+/* #undef HAVE_BZLIB_H */
+/* #undef HAVE_LIBLZMA */
+/* #undef HAVE_LZMA_H */
+/* #undef HAVE_LIBZSTD */
+/* #undef HAVE_ZSTD_H */
+/* #undef HAVE_ZSTD_ERRORS_H */
+/* #undef HAVE_LIBLZ */
+/* #undef HAVE_LZLIB_H */
+/* #undef HAVE_LIBLRZIP */
+/* #undef HAVE_LRZIP_H */
+
+/* Linux sandboxing. seccomp.c and landlock.c are not vendored at all. */
+/* #undef HAVE_LIBSECCOMP */
+/* #undef HAVE_LINUX_LANDLOCK_H */
+
+/* POSIX process and pipe APIs. Windows has none of these. */
+/* #undef HAVE_SPAWN_H */
+/* #undef HAVE_POSIX_SPAWNP */
+/* #undef HAVE_VFORK_H */
+/* #undef HAVE_PIPE2 */
+
+/* POSIX per-thread locales. MSVC spells these _create_locale/_free_locale. */
+/* #undef HAVE_XLOCALE_H */
+/* #undef HAVE_NEWLOCALE */
+/* #undef HAVE_FREELOCALE */
+/* #undef HAVE_USELOCALE */
+
+/* Reentrant time functions. src/gmtime_r.c and src/localtime_r.c are
+   compiled on Windows to supply these instead. */
+/* #undef HAVE_GMTIME_R */
+/* #undef HAVE_LOCALTIME_R */
+
+/* Headers and functions MSVC does not ship. */
+/* #undef HAVE_BYTESWAP_H */
+/* #undef HAVE_SYS_BSWAP_H */
+/* #undef HAVE_SYS_IOCTL_H */
+/* #undef HAVE_SYS_SYSMACROS_H */
+/* #undef HAVE_MINIX_CONFIG_H */
+/* #undef HAVE_MEMMEM */
+/* #undef HAVE_SIG_T */
+
+/* src/fmtcheck.c is compiled on Windows, so the system one is not used. */
+/* #undef HAVE_FMTCHECK */
+
+/* Not applicable: Apple universal builds, 64-bit time_t opt-in on 32-bit
+   glibc, a MinGW compatibility toggle, and the Solaris 2.5.1 typedef
+   guards. Left undefined exactly as the POSIX configs leave them. */
+/* #undef AC_APPLE_UNIVERSAL_BUILD */
+/* #undef _TIME_BITS */
+/* #undef __MINGW_USE_VC2005_COMPAT */
+/* #undef _UINT8_T */
+/* #undef _UINT32_T */
+/* #undef _UINT64_T */
+
+/* ------------------------------------------------------------------------
+ * MSVC type and macro accommodations.
+ *
+ * Up to 5.32 these lived as edits inside deps/libmagic/src/file.h, marked
+ * "XXX: local change to vendored libmagic". They are here now because this
+ * file belongs to the fork and survives a vendor refresh untouched, whereas
+ * patches to upstream sources are silently lost the moment those sources are
+ * replaced -- which is exactly what happened going to 5.48.
+ *
+ * config.h is included at the top of file.h, before any declaration that
+ * needs these, so defining them here reaches every translation unit.
+ * --------------------------------------------------------------------- */
+
+#ifdef _MSC_VER
+
+/* The Microsoft CRT has neither of these. size_t is deliberately NOT
+ * typedef'd -- MSVC provides it in <stddef.h> and redefining it conflicts. */
+typedef unsigned int mode_t;
+
+# ifndef _SSIZE_T_DEFINED
+#  define _SSIZE_T_DEFINED
+#  ifdef _WIN64
+typedef __int64 ssize_t;
+#  else
+typedef int ssize_t;
+#  endif
+# endif
+
+/* File-type bits. MSVC's <sys/stat.h> carries only _S_IFMT, _S_IFDIR,
+ * _S_IFCHR, _S_IFIFO and _S_IFREG, all with POSIX values.
+ *
+ * S_IFIFO: fsmagic.c assigns it when GetFileType() reports a pipe.
+ * S_IFBLK: fsmagic.c:143 and magic.c:472 assign it unguarded inside their
+ *   own #ifdef WIN32 blocks -- "stat failed but the handle opened, so assume
+ *   a block device". Upstream only exercises those paths under MinGW, whose
+ *   headers define it. 0060000 is the POSIX value and does not collide with
+ *   the bits MSVC already defines.
+ *
+ * S_IFLNK, S_IFSOCK, S_ISUID, S_ISGID and S_ISVTX are deliberately left
+ * undefined. Every use of them is behind #ifdef, and defining them would
+ * unguard code that calls lstat(), readlink() and friends -- none of which
+ * MSVC has. Absent is the correct answer, not a gap. */
+# include <sys/stat.h>
+# ifndef S_IFIFO
+#  define S_IFIFO _S_IFIFO
+# endif
+# ifndef S_IFBLK
+#  define S_IFBLK 0060000
+# endif
+
+/* Standard descriptor numbers. compress.c uses STDIN_FILENO but only includes
+ * <unistd.h> under HAVE_UNISTD_H, which is correctly undefined here -- so the
+ * msvc/unistd.h shim never reaches it. magic.c carries its own fallback;
+ * compress.c does not. Defining them here covers every file unconditionally.
+ *
+ * HAVE_UNISTD_H is deliberately NOT set instead: the shim supplies the types
+ * and descriptor numbers libmagic needs, but not fork, pipe or the rest of
+ * POSIX, and claiming the header exists would unguard code that wants those. */
+# ifndef STDIN_FILENO
+#  define STDIN_FILENO  0
+# endif
+# ifndef STDOUT_FILENO
+#  define STDOUT_FILENO 1
+# endif
+# ifndef STDERR_FILENO
+#  define STDERR_FILENO 2
+# endif
+
+/* The S_IS*() type-test macros. POSIX defines these as macros, not functions;
+ * MSVC ships none of them, so the compiler treated each use as an implicit
+ * function call and the link failed with unresolved externals for S_ISREG and
+ * S_ISFIFO. Standard definitions, in terms of bits MSVC does provide. */
+# ifndef S_ISREG
+#  define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
+# endif
+# ifndef S_ISDIR
+#  define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
+# endif
+# ifndef S_ISFIFO
+#  define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
+# endif
+# ifndef S_ISCHR
+#  define S_ISCHR(m)  (((m) & S_IFMT) == S_IFCHR)
+# endif
+# ifndef S_ISBLK
+#  define S_ISBLK(m)  (((m) & S_IFMT) == S_IFBLK)
+# endif
+
+/* pipe(). funcs.c:file_pipe_closexec() special-cases Windows with
+ * #ifdef __MINGW32__ only, so an MSVC build falls through to the POSIX
+ * branch and calls pipe(), which does not exist here. The CRT's _pipe()
+ * does the same job but takes a buffer size and a mode, so it needs a
+ * wrapper rather than a macro alias. */
+# include <io.h>      /* _pipe */
+# include <fcntl.h>   /* _O_BINARY */
+# ifndef MMMAGIC_HAVE_PIPE_WRAPPER
+#  define MMMAGIC_HAVE_PIPE_WRAPPER 1
+static __inline int pipe(int fds[2]) {
+	return _pipe(fds, 4096, _O_BINARY);
+}
+# endif
+
+/* access() mode bits. Windows has no execute permission to test, so X_OK is
+ * folded into a plain existence check, which is what the CRT does anyway. */
+# ifndef F_OK
+#  define F_OK 0
+# endif
+# ifndef X_OK
+#  define X_OK 1
+# endif
+# ifndef W_OK
+#  define W_OK 2
+# endif
+# ifndef R_OK
+#  define R_OK 4
+# endif
+
+#endif /* _MSC_VER */

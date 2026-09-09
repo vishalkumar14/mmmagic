@@ -1,7 +1,7 @@
 /*
  * Copyright (c) Christos Zoulas 2003.
  * All Rights Reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -11,7 +11,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *  
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -27,13 +27,14 @@
 #include "file.h"
 
 #ifndef lint
-FILE_RCSID("@(#)$File: readelf.c,v 1.138 2017/08/27 07:55:02 christos Exp $")
+FILE_RCSID("@(#)$File: readelf.c,v 1.206 2026/04/24 19:14:02 christos Exp $")
 #endif
 
 #ifdef BUILTIN_ELF
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -42,38 +43,53 @@ FILE_RCSID("@(#)$File: readelf.c,v 1.138 2017/08/27 07:55:02 christos Exp $")
 #include "magic.h"
 
 #ifdef	ELFCORE
-private int dophn_core(struct magic_set *, int, int, int, off_t, int, size_t,
-    off_t, int *, uint16_t *);
+file_private int dophn_core(struct magic_set *, int, int, int, off_t, int,
+    size_t, off_t, int *, uint16_t *);
 #endif
-private int dophn_exec(struct magic_set *, int, int, int, off_t, int, size_t,
-    off_t, int, int *, uint16_t *);
-private int doshn(struct magic_set *, int, int, int, off_t, int, size_t,
+file_private int dophn_exec(struct magic_set *, int, int, int, off_t, int,
+    size_t, off_t, int, int *, uint16_t *);
+file_private int doshn(struct magic_set *, int, int, int, off_t, int, size_t,
     off_t, int, int, int *, uint16_t *);
-private size_t donote(struct magic_set *, void *, size_t, size_t, int,
+file_private size_t donote(struct magic_set *, void *, size_t, size_t, int,
     int, size_t, int *, uint16_t *, int, off_t, int, off_t);
 
 #define	ELF_ALIGN(a)	((((a) + align - 1) / align) * align)
 
 #define isquote(c) (strchr("'\"`", (c)) != NULL)
 
-private uint16_t getu16(int, uint16_t);
-private uint32_t getu32(int, uint32_t);
-private uint64_t getu64(int, uint64_t);
+file_private uint16_t getu16(int, uint16_t);
+file_private uint32_t getu32(int, uint32_t);
+file_private uint64_t getu64(int, uint64_t);
 
-#define MAX_PHNUM	128
-#define	MAX_SHNUM	32768
-#define SIZE_UNKNOWN	((off_t)-1)
+#define NBUFSIZE 2024
+#define SIZE_UNKNOWN	CAST(off_t, -1)
+#define NAMEEQUALS(n, v) \
+    (namesz == sizeof(v) && memcmp(n, v, namesz) == 0)
 
-private int
+__attribute__((__format__(__printf__, 2, 3)))
+file_private int
+elf_printf(struct magic_set *ms, const char *fmt, ...)
+{
+	va_list ap;
+	int rv;
+
+	if (ms->flags & MAGIC_MIME)
+		return 1;
+
+	va_start(ap, fmt);
+	rv = file_vprintf(ms, fmt, ap);
+	va_end(ap);
+	return rv;
+}
+file_private int
 toomany(struct magic_set *ms, const char *name, uint16_t num)
 {
-	if (file_printf(ms, ", too many %s (%u)", name, num
-	    ) == -1)
+	if (elf_printf(ms, ", too many %s (%u)", name, num) == -1)
 		return -1;
-	return 0;
+	return 1;
 }
 
-private uint16_t
+file_private uint16_t
 getu16(int swap, uint16_t value)
 {
 	union {
@@ -86,13 +102,13 @@ getu16(int swap, uint16_t value)
 
 		retval.c[0] = tmpval.c[1];
 		retval.c[1] = tmpval.c[0];
-		
+
 		return retval.ui;
 	} else
 		return value;
 }
 
-private uint32_t
+file_private uint32_t
 getu32(int swap, uint32_t value)
 {
 	union {
@@ -107,13 +123,13 @@ getu32(int swap, uint32_t value)
 		retval.c[1] = tmpval.c[2];
 		retval.c[2] = tmpval.c[1];
 		retval.c[3] = tmpval.c[0];
-		
+
 		return retval.ui;
 	} else
 		return value;
 }
 
-private uint64_t
+file_private uint64_t
 getu64(int swap, uint64_t value)
 {
 	union {
@@ -132,7 +148,7 @@ getu64(int swap, uint64_t value)
 		retval.c[5] = tmpval.c[2];
 		retval.c[6] = tmpval.c[1];
 		retval.c[7] = tmpval.c[0];
-		
+
 		return retval.ui;
 	} else
 		return value;
@@ -143,54 +159,55 @@ getu64(int swap, uint64_t value)
 #define elf_getu64(swap, value) getu64(swap, value)
 
 #define xsh_addr	(clazz == ELFCLASS32			\
-			 ? (void *)&sh32			\
-			 : (void *)&sh64)
+			 ? CAST(void *, &sh32)			\
+			 : CAST(void *, &sh64))
 #define xsh_sizeof	(clazz == ELFCLASS32			\
 			 ? sizeof(sh32)				\
 			 : sizeof(sh64))
-#define xsh_size	(size_t)(clazz == ELFCLASS32		\
+#define xsh_size	CAST(size_t, (clazz == ELFCLASS32	\
 			 ? elf_getu32(swap, sh32.sh_size)	\
-			 : elf_getu64(swap, sh64.sh_size))
-#define xsh_offset	(off_t)(clazz == ELFCLASS32		\
+			 : elf_getu64(swap, sh64.sh_size)))
+#define xsh_offset	CAST(off_t, (clazz == ELFCLASS32	\
 			 ? elf_getu32(swap, sh32.sh_offset)	\
-			 : elf_getu64(swap, sh64.sh_offset))
+			 : elf_getu64(swap, sh64.sh_offset)))
 #define xsh_type	(clazz == ELFCLASS32			\
 			 ? elf_getu32(swap, sh32.sh_type)	\
 			 : elf_getu32(swap, sh64.sh_type))
 #define xsh_name    	(clazz == ELFCLASS32			\
 			 ? elf_getu32(swap, sh32.sh_name)	\
 			 : elf_getu32(swap, sh64.sh_name))
+
 #define xph_addr	(clazz == ELFCLASS32			\
-			 ? (void *) &ph32			\
-			 : (void *) &ph64)
+			 ? CAST(void *, &ph32)			\
+			 : CAST(void *, &ph64))
 #define xph_sizeof	(clazz == ELFCLASS32			\
 			 ? sizeof(ph32)				\
 			 : sizeof(ph64))
 #define xph_type	(clazz == ELFCLASS32			\
 			 ? elf_getu32(swap, ph32.p_type)	\
 			 : elf_getu32(swap, ph64.p_type))
-#define xph_offset	(off_t)(clazz == ELFCLASS32		\
+#define xph_offset	CAST(off_t, (clazz == ELFCLASS32	\
 			 ? elf_getu32(swap, ph32.p_offset)	\
-			 : elf_getu64(swap, ph64.p_offset))
-#define xph_align	(size_t)((clazz == ELFCLASS32		\
-			 ? (off_t) (ph32.p_align ? 		\
-			    elf_getu32(swap, ph32.p_align) : 4) \
-			 : (off_t) (ph64.p_align ?		\
-			    elf_getu64(swap, ph64.p_align) : 4)))
-#define xph_vaddr	(size_t)((clazz == ELFCLASS32		\
-			 ? (off_t) (ph32.p_vaddr ? 		\
-			    elf_getu32(swap, ph32.p_vaddr) : 4) \
-			 : (off_t) (ph64.p_vaddr ?		\
-			    elf_getu64(swap, ph64.p_vaddr) : 4)))
-#define xph_filesz	(size_t)((clazz == ELFCLASS32		\
+			 : elf_getu64(swap, ph64.p_offset)))
+#define xph_align	CAST(size_t, (clazz == ELFCLASS32	\
+			 ? CAST(off_t, (ph32.p_align ? 		\
+			    elf_getu32(swap, ph32.p_align) : 4))\
+			 : CAST(off_t, (ph64.p_align ?		\
+			    elf_getu64(swap, ph64.p_align) : 4))))
+#define xph_vaddr	CAST(size_t, (clazz == ELFCLASS32	\
+			 ? CAST(off_t, (ph32.p_vaddr ? 		\
+			    elf_getu32(swap, ph32.p_vaddr) : 4))\
+			 : CAST(off_t, (ph64.p_vaddr ?		\
+			    elf_getu64(swap, ph64.p_vaddr) : 4))))
+#define xph_filesz	CAST(size_t, (clazz == ELFCLASS32	\
 			 ? elf_getu32(swap, ph32.p_filesz)	\
 			 : elf_getu64(swap, ph64.p_filesz)))
-#define xnh_addr	(clazz == ELFCLASS32			\
-			 ? (void *)&nh32			\
-			 : (void *)&nh64)
-#define xph_memsz	(size_t)((clazz == ELFCLASS32		\
+#define xph_memsz	CAST(size_t, ((clazz == ELFCLASS32	\
 			 ? elf_getu32(swap, ph32.p_memsz)	\
-			 : elf_getu64(swap, ph64.p_memsz)))
+			 : elf_getu64(swap, ph64.p_memsz))))
+#define xnh_addr	(clazz == ELFCLASS32			\
+			 ? CAST(void *, &nh32)			\
+			 : CAST(void *, &nh64))
 #define xnh_sizeof	(clazz == ELFCLASS32			\
 			 ? sizeof(nh32)				\
 			 : sizeof(nh64))
@@ -203,24 +220,36 @@ getu64(int swap, uint64_t value)
 #define xnh_descsz	(clazz == ELFCLASS32			\
 			 ? elf_getu32(swap, nh32.n_descsz)	\
 			 : elf_getu32(swap, nh64.n_descsz))
-#define prpsoffsets(i)	(clazz == ELFCLASS32			\
-			 ? prpsoffsets32[i]			\
-			 : prpsoffsets64[i])
+
+#define xdh_addr	(clazz == ELFCLASS32			\
+			 ? CAST(void *, &dh32)			\
+			 : CAST(void *, &dh64))
+#define xdh_sizeof	(clazz == ELFCLASS32			\
+			 ? sizeof(dh32)				\
+			 : sizeof(dh64))
+#define xdh_tag		(clazz == ELFCLASS32			\
+			 ? elf_getu32(swap, dh32.d_tag)		\
+			 : elf_getu64(swap, dh64.d_tag))
+#define xdh_val		(clazz == ELFCLASS32			\
+			 ? elf_getu32(swap, dh32.d_un.d_val)	\
+			 : elf_getu64(swap, dh64.d_un.d_val))
+
 #define xcap_addr	(clazz == ELFCLASS32			\
-			 ? (void *)&cap32			\
-			 : (void *)&cap64)
+			 ? CAST(void *, &cap32)			\
+			 : CAST(void *, &cap64))
 #define xcap_sizeof	(clazz == ELFCLASS32			\
-			 ? sizeof cap32				\
-			 : sizeof cap64)
+			 ? sizeof(cap32)			\
+			 : sizeof(cap64))
 #define xcap_tag	(clazz == ELFCLASS32			\
 			 ? elf_getu32(swap, cap32.c_tag)	\
 			 : elf_getu64(swap, cap64.c_tag))
 #define xcap_val	(clazz == ELFCLASS32			\
 			 ? elf_getu32(swap, cap32.c_un.c_val)	\
 			 : elf_getu64(swap, cap64.c_un.c_val))
+
 #define xauxv_addr	(clazz == ELFCLASS32			\
-			 ? (void *)&auxv32			\
-			 : (void *)&auxv64)
+			 ? CAST(void *, &auxv32)		\
+			 : CAST(void *, &auxv64))
 #define xauxv_sizeof	(clazz == ELFCLASS32			\
 			 ? sizeof(auxv32)			\
 			 : sizeof(auxv64))
@@ -230,6 +259,10 @@ getu64(int swap, uint64_t value)
 #define xauxv_val	(clazz == ELFCLASS32			\
 			 ? elf_getu32(swap, auxv32.a_v)		\
 			 : elf_getu64(swap, auxv64.a_v))
+
+#define prpsoffsets(i)	(clazz == ELFCLASS32			\
+			 ? prpsoffsets32[i]			\
+			 : prpsoffsets64[i])
 
 #ifdef ELFCORE
 /*
@@ -246,7 +279,10 @@ static const size_t	prpsoffsets32[] = {
 	84,		/* SunOS 5.x (short name) */
 
 	44,		/* Linux (command line) */
-	28,		/* Linux 2.0.36 (short name) */
+	28,		/* Linux (short name) */
+
+	48,		/* Linux PowerPC (command line) */
+	32,		/* Linux PowerPC (short name) */
 
 	8,		/* FreeBSD */
 };
@@ -266,8 +302,8 @@ static const size_t	prpsoffsets64[] = {
 	16,		/* FreeBSD, 64-bit */
 };
 
-#define	NOFFSETS32	(sizeof prpsoffsets32 / sizeof prpsoffsets32[0])
-#define NOFFSETS64	(sizeof prpsoffsets64 / sizeof prpsoffsets64[0])
+#define	NOFFSETS32	__arraycount(prpsoffsets32)
+#define NOFFSETS64	__arraycount(prpsoffsets64)
 
 #define NOFFSETS	(clazz == ELFCLASS32 ? NOFFSETS32 : NOFFSETS64)
 
@@ -304,39 +340,49 @@ static const size_t	prpsoffsets64[] = {
 #define	OS_STYLE_FREEBSD	1
 #define	OS_STYLE_NETBSD		2
 
-private const char os_style_names[][8] = {
+file_private const char os_style_names[][8] = {
 	"SVR4",
 	"FreeBSD",
 	"NetBSD",
 };
 
-#define FLAGS_CORE_STYLE		0x003
+#define FLAGS_CORE_STYLE		0x0003
 
-#define FLAGS_DID_CORE			0x004
-#define FLAGS_DID_OS_NOTE		0x008
-#define FLAGS_DID_BUILD_ID		0x010
-#define FLAGS_DID_CORE_STYLE		0x020
-#define FLAGS_DID_NETBSD_PAX		0x040
-#define FLAGS_DID_NETBSD_MARCH		0x080
-#define FLAGS_DID_NETBSD_CMODEL		0x100
-#define FLAGS_DID_NETBSD_UNKNOWN	0x200
-#define FLAGS_IS_CORE			0x400
-#define FLAGS_DID_AUXV			0x800
+#define FLAGS_DID_CORE			0x0004
+#define FLAGS_DID_OS_NOTE		0x0008
+#define FLAGS_DID_BUILD_ID		0x0010
+#define FLAGS_DID_CORE_STYLE		0x0020
+#define FLAGS_DID_NETBSD_PAX		0x0040
+#define FLAGS_DID_NETBSD_MARCH		0x0080
+#define FLAGS_DID_NETBSD_CMODEL		0x0100
+#define FLAGS_DID_NETBSD_EMULATION	0x0200
+#define FLAGS_DID_NETBSD_UNKNOWN	0x0400
+#define FLAGS_DID_ANDROID_MEMTAG	0x0800
+#define FLAGS_IS_CORE			0x1000
+#define FLAGS_DID_AUXV			0x2000
 
-private int
+file_private int
 dophn_core(struct magic_set *ms, int clazz, int swap, int fd, off_t off,
     int num, size_t size, off_t fsize, int *flags, uint16_t *notecount)
 {
 	Elf32_Phdr ph32;
 	Elf64_Phdr ph64;
 	size_t offset, len;
-	unsigned char nbuf[BUFSIZ];
+	unsigned char nbuf[NBUFSIZE];
 	ssize_t bufsize;
-	off_t ph_off = off;
+	off_t ph_off = off, offs;
 	int ph_num = num;
 
+	if (ms->flags & MAGIC_MIME)
+		return 0;
+
+	if (num == 0) {
+		if (elf_printf(ms, ", no program header") == -1)
+			return -1;
+		return 0;
+	}
 	if (size != xph_sizeof) {
-		if (file_printf(ms, ", corrupted program header size") == -1)
+		if (elf_printf(ms, ", corrupted program header size") == -1)
 			return -1;
 		return 0;
 	}
@@ -345,9 +391,13 @@ dophn_core(struct magic_set *ms, int clazz, int swap, int fd, off_t off,
 	 * Loop through all the program headers.
 	 */
 	for ( ; num; num--) {
-		if (pread(fd, xph_addr, xph_sizeof, off) < (ssize_t)xph_sizeof) {
-			file_badread(ms);
-			return -1;
+		if (pread(fd, xph_addr, xph_sizeof, off) <
+		    CAST(ssize_t, xph_sizeof)) {
+			if (elf_printf(ms, 
+			    ", can't read elf program headers at %jd",
+			    (intmax_t)off) == -1)
+				return -1;
+			return 0;
 		}
 		off += size;
 
@@ -364,15 +414,18 @@ dophn_core(struct magic_set *ms, int clazz, int swap, int fd, off_t off,
 		 * in the section.
 		 */
 		len = xph_filesz < sizeof(nbuf) ? xph_filesz : sizeof(nbuf);
-		if ((bufsize = pread(fd, nbuf, len, xph_offset)) == -1) {
-			file_badread(ms);
-			return -1;
+		offs = xph_offset;
+		if ((bufsize = pread(fd, nbuf, len, offs)) == -1) {
+			if (elf_printf(ms, " can't read note section at %jd",
+			    (intmax_t)offs) == -1)
+				return -1;
+			return 0;
 		}
 		offset = 0;
 		for (;;) {
-			if (offset >= (size_t)bufsize)
+			if (offset >= CAST(size_t, bufsize))
 				break;
-			offset = donote(ms, nbuf, offset, (size_t)bufsize,
+			offset = donote(ms, nbuf, offset, CAST(size_t, bufsize),
 			    clazz, swap, 4, flags, notecount, fd, ph_off,
 			    ph_num, fsize);
 			if (offset == 0)
@@ -384,15 +437,15 @@ dophn_core(struct magic_set *ms, int clazz, int swap, int fd, off_t off,
 }
 #endif
 
-static void
+static int
 do_note_netbsd_version(struct magic_set *ms, int swap, void *v)
 {
 	uint32_t desc;
-	(void)memcpy(&desc, v, sizeof(desc));
+	memcpy(&desc, v, sizeof(desc));
 	desc = elf_getu32(swap, desc);
 
-	if (file_printf(ms, ", for NetBSD") == -1)
-		return;
+	if (elf_printf(ms, ", for NetBSD") == -1)
+		return -1;
 	/*
 	 * The version number used to be stuck as 199905, and was thus
 	 * basically content-free.  Newer versions of NetBSD have fixed
@@ -411,106 +464,111 @@ do_note_netbsd_version(struct magic_set *ms, int swap, void *v)
 		uint32_t ver_min = (desc / 1000000) % 100;
 		uint32_t ver_maj = desc / 100000000;
 
-		if (file_printf(ms, " %u.%u", ver_maj, ver_min) == -1)
-			return;
+		if (elf_printf(ms, " %u.%u", ver_maj, ver_min) == -1)
+			return -1;
+		if (ver_maj >= 9) {
+			ver_patch += 100 * ver_rel;
+			ver_rel = 0;
+		}
 		if (ver_rel == 0 && ver_patch != 0) {
-			if (file_printf(ms, ".%u", ver_patch) == -1)
-				return;
+			if (elf_printf(ms, ".%u", ver_patch) == -1)
+				return -1;
 		} else if (ver_rel != 0) {
 			while (ver_rel > 26) {
-				if (file_printf(ms, "Z") == -1)
-					return;
+				if (elf_printf(ms, "Z") == -1)
+					return -1;
 				ver_rel -= 26;
 			}
-			if (file_printf(ms, "%c", 'A' + ver_rel - 1)
-			    == -1)
-				return;
+			if (elf_printf(ms, "%c", 'A' + ver_rel - 1) == -1)
+				return -1;
 		}
 	}
+	return 0;
 }
 
-static void
+static int
 do_note_freebsd_version(struct magic_set *ms, int swap, void *v)
 {
 	uint32_t desc;
 
-	(void)memcpy(&desc, v, sizeof(desc));
+	memcpy(&desc, v, sizeof(desc));
 	desc = elf_getu32(swap, desc);
-	if (file_printf(ms, ", for FreeBSD") == -1)
-		return;
+	if (elf_printf(ms, ", for FreeBSD") == -1)
+		return -1;
 
 	/*
 	 * Contents is __FreeBSD_version, whose relation to OS
 	 * versions is defined by a huge table in the Porter's
 	 * Handbook.  This is the general scheme:
-	 * 
+	 *
 	 * Releases:
 	 * 	Mmp000 (before 4.10)
 	 * 	Mmi0p0 (before 5.0)
 	 * 	Mmm0p0
-	 * 
+	 *
 	 * Development branches:
 	 * 	Mmpxxx (before 4.6)
 	 * 	Mmp1xx (before 4.10)
 	 * 	Mmi1xx (before 5.0)
 	 * 	M000xx (pre-M.0)
 	 * 	Mmm1xx
-	 * 
+	 *
 	 * M = major version
 	 * m = minor version
 	 * i = minor version increment (491000 -> 4.10)
 	 * p = patchlevel
 	 * x = revision
-	 * 
+	 *
 	 * The first release of FreeBSD to use ELF by default
 	 * was version 3.0.
 	 */
 	if (desc == 460002) {
-		if (file_printf(ms, " 4.6.2") == -1)
-			return;
+		if (elf_printf(ms, " 4.6.2") == -1)
+			return -1;
 	} else if (desc < 460100) {
-		if (file_printf(ms, " %d.%d", desc / 100000,
+		if (elf_printf(ms, " %d.%d", desc / 100000,
 		    desc / 10000 % 10) == -1)
-			return;
+			return -1;
 		if (desc / 1000 % 10 > 0)
-			if (file_printf(ms, ".%d", desc / 1000 % 10) == -1)
-				return;
+			if (elf_printf(ms, ".%d", desc / 1000 % 10) == -1)
+				return -1;
 		if ((desc % 1000 > 0) || (desc % 100000 == 0))
-			if (file_printf(ms, " (%d)", desc) == -1)
-				return;
+			if (elf_printf(ms, " (%d)", desc) == -1)
+				return -1;
 	} else if (desc < 500000) {
-		if (file_printf(ms, " %d.%d", desc / 100000,
+		if (elf_printf(ms, " %d.%d", desc / 100000,
 		    desc / 10000 % 10 + desc / 1000 % 10) == -1)
-			return;
+			return -1;
 		if (desc / 100 % 10 > 0) {
-			if (file_printf(ms, " (%d)", desc) == -1)
-				return;
+			if (elf_printf(ms, " (%d)", desc) == -1)
+				return -1;
 		} else if (desc / 10 % 10 > 0) {
-			if (file_printf(ms, ".%d", desc / 10 % 10) == -1)
-				return;
+			if (elf_printf(ms, ".%d", desc / 10 % 10) == -1)
+				return -1;
 		}
 	} else {
-		if (file_printf(ms, " %d.%d", desc / 100000,
+		if (elf_printf(ms, " %d.%d", desc / 100000,
 		    desc / 1000 % 100) == -1)
-			return;
+			return -1;
 		if ((desc / 100 % 10 > 0) ||
 		    (desc % 100000 / 100 == 0)) {
-			if (file_printf(ms, " (%d)", desc) == -1)
-				return;
+			if (elf_printf(ms, " (%d)", desc) == -1)
+				return -1;
 		} else if (desc / 10 % 10 > 0) {
-			if (file_printf(ms, ".%d", desc / 10 % 10) == -1)
-				return;
+			if (elf_printf(ms, ".%d", desc / 10 % 10) == -1)
+				return -1;
 		}
 	}
+	return 0;
 }
 
-private int
+file_private int
 /*ARGSUSED*/
 do_bid_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
     int swap __attribute__((__unused__)), uint32_t namesz, uint32_t descsz,
     size_t noff, size_t doff, int *flags)
 {
-	if (namesz == 4 && strcmp((char *)&nbuf[noff], "GNU") == 0 &&
+	if (NAMEEQUALS(RCAST(char *, &nbuf[noff]), "GNU") &&
 	    type == NT_GNU_BUILD_ID && (descsz >= 4 && descsz <= 20)) {
 		uint8_t desc[20];
 		const char *btype;
@@ -530,116 +588,151 @@ do_bid_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 		    btype = "unknown";
 		    break;
 		}
-		if (file_printf(ms, ", BuildID[%s]=", btype) == -1)
-			return 1;
-		(void)memcpy(desc, &nbuf[doff], descsz);
+		if (elf_printf(ms, ", BuildID[%s]=", btype) == -1)
+			return -1;
+		memcpy(desc, &nbuf[doff], descsz);
 		for (i = 0; i < descsz; i++)
-		    if (file_printf(ms, "%02x", desc[i]) == -1)
-			return 1;
+		    if (elf_printf(ms, "%02x", desc[i]) == -1)
+			return -1;
+		return 1;
+	}
+	if (namesz == 4 && memcmp(RCAST(char *, &nbuf[noff]), "Go", 3) == 0 &&
+	    type == NT_GO_BUILD_ID && descsz < 128) {
+		char buf[256];
+		if (elf_printf(ms, ", Go BuildID=%s",
+		    file_copystr(buf, sizeof(buf), descsz,
+		    RCAST(const char *, &nbuf[doff]))) == -1)
+			return -1;
 		return 1;
 	}
 	return 0;
 }
 
-private int
+file_private int
 do_os_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
     int swap, uint32_t namesz, uint32_t descsz,
     size_t noff, size_t doff, int *flags)
 {
-	if (namesz == 5 && strcmp((char *)&nbuf[noff], "SuSE") == 0 &&
-	    type == NT_GNU_VERSION && descsz == 2) {
-	    *flags |= FLAGS_DID_OS_NOTE;
-	    file_printf(ms, ", for SuSE %d.%d", nbuf[doff], nbuf[doff + 1]);
+	const char *name = RCAST(const char *, &nbuf[noff]);
+
+	if (NAMEEQUALS(name, "SuSE") && type == NT_GNU_VERSION && descsz == 2) {
+		*flags |= FLAGS_DID_OS_NOTE;
+		if (elf_printf(ms, ", for SuSE %d.%d", nbuf[doff],
+		    nbuf[doff + 1]) == -1)
+		    return -1;
 	    return 1;
 	}
 
-	if (namesz == 4 && strcmp((char *)&nbuf[noff], "GNU") == 0 &&
-	    type == NT_GNU_VERSION && descsz == 16) {
+	if (NAMEEQUALS(name, "GNU") && type == NT_GNU_VERSION && descsz == 16) {
 		uint32_t desc[4];
-		(void)memcpy(desc, &nbuf[doff], sizeof(desc));
+		memcpy(desc, &nbuf[doff], sizeof(desc));
 
 		*flags |= FLAGS_DID_OS_NOTE;
-		if (file_printf(ms, ", for GNU/") == -1)
-			return 1;
+		if (elf_printf(ms, ", for GNU/") == -1)
+			return -1;
 		switch (elf_getu32(swap, desc[0])) {
 		case GNU_OS_LINUX:
-			if (file_printf(ms, "Linux") == -1)
-				return 1;
+			if (elf_printf(ms, "Linux") == -1)
+				return -1;
 			break;
 		case GNU_OS_HURD:
-			if (file_printf(ms, "Hurd") == -1)
-				return 1;
+			if (elf_printf(ms, "Hurd") == -1)
+				return -1;
 			break;
 		case GNU_OS_SOLARIS:
-			if (file_printf(ms, "Solaris") == -1)
-				return 1;
+			if (elf_printf(ms, "Solaris") == -1)
+				return -1;
 			break;
 		case GNU_OS_KFREEBSD:
-			if (file_printf(ms, "kFreeBSD") == -1)
-				return 1;
+			if (elf_printf(ms, "kFreeBSD") == -1)
+				return -1;
 			break;
 		case GNU_OS_KNETBSD:
-			if (file_printf(ms, "kNetBSD") == -1)
-				return 1;
+			if (elf_printf(ms, "kNetBSD") == -1)
+				return -1;
 			break;
 		default:
-			if (file_printf(ms, "<unknown>") == -1)
-				return 1; 
+			if (elf_printf(ms, "<unknown>") == -1)
+				return -1;
 		}
-		if (file_printf(ms, " %d.%d.%d", elf_getu32(swap, desc[1]),
+		if (elf_printf(ms, " %d.%d.%d", elf_getu32(swap, desc[1]),
 		    elf_getu32(swap, desc[2]), elf_getu32(swap, desc[3])) == -1)
-			return 1;
+			return -1;
 		return 1;
 	}
 
-	if (namesz == 7 && strcmp((char *)&nbuf[noff], "NetBSD") == 0) {
-	    	if (type == NT_NETBSD_VERSION && descsz == 4) {
-			*flags |= FLAGS_DID_OS_NOTE;
-			do_note_netbsd_version(ms, swap, &nbuf[doff]);
-			return 1;
-		}
+	if (NAMEEQUALS(name, "NetBSD") &&
+	    type == NT_NETBSD_VERSION && descsz == 4) {
+		*flags |= FLAGS_DID_OS_NOTE;
+		if (do_note_netbsd_version(ms, swap, &nbuf[doff]) == -1)
+			return -1;
+		return 1;
 	}
 
-	if (namesz == 8 && strcmp((char *)&nbuf[noff], "FreeBSD") == 0) {
-	    	if (type == NT_FREEBSD_VERSION && descsz == 4) {
-			*flags |= FLAGS_DID_OS_NOTE;
-			do_note_freebsd_version(ms, swap, &nbuf[doff]);
-			return 1;
-		}
+	if (NAMEEQUALS(name, "FreeBSD") &&
+	    type == NT_FREEBSD_VERSION && descsz == 4) {
+		*flags |= FLAGS_DID_OS_NOTE;
+		if (do_note_freebsd_version(ms, swap, &nbuf[doff])
+		    == -1)
+			return -1;
+		return 1;
 	}
 
-	if (namesz == 8 && strcmp((char *)&nbuf[noff], "OpenBSD") == 0 &&
+	if (NAMEEQUALS(name, "OpenBSD") &&
 	    type == NT_OPENBSD_VERSION && descsz == 4) {
 		*flags |= FLAGS_DID_OS_NOTE;
-		if (file_printf(ms, ", for OpenBSD") == -1)
-			return 1;
+		if (elf_printf(ms, ", for OpenBSD") == -1)
+			return -1;
 		/* Content of note is always 0 */
 		return 1;
 	}
 
-	if (namesz == 10 && strcmp((char *)&nbuf[noff], "DragonFly") == 0 &&
+	if (NAMEEQUALS(name, "DragonFly") &&
 	    type == NT_DRAGONFLY_VERSION && descsz == 4) {
 		uint32_t desc;
 		*flags |= FLAGS_DID_OS_NOTE;
-		if (file_printf(ms, ", for DragonFly") == -1)
-			return 1;
-		(void)memcpy(&desc, &nbuf[doff], sizeof(desc));
+		if (elf_printf(ms, ", for DragonFly") == -1)
+			return -1;
+		memcpy(&desc, &nbuf[doff], sizeof(desc));
 		desc = elf_getu32(swap, desc);
-		if (file_printf(ms, " %d.%d.%d", desc / 100000,
+		if (elf_printf(ms, " %d.%d.%d", desc / 100000,
 		    desc / 10000 % 10, desc % 10000) == -1)
-			return 1;
+			return -1;
 		return 1;
 	}
+
+	if (NAMEEQUALS(name, "Android") &&
+	    type == NT_ANDROID_VERSION && descsz >= 4) {
+		uint32_t api_level;
+		*flags |= FLAGS_DID_OS_NOTE;
+		memcpy(&api_level, &nbuf[doff], sizeof(api_level));
+		api_level = elf_getu32(swap, api_level);
+		if (elf_printf(ms, ", for Android %d", api_level) == -1)
+			return -1;
+		/*
+		 * NDK r14 and later also include details of the NDK that
+		 * built the binary. OS binaries (or binaries built by older
+		 * NDKs) don't have this. The NDK release and build number
+		 * are both 64-byte strings.
+		 */
+		if (descsz >= 4 + 64 + 64) {
+			if (elf_printf(ms, ", built by NDK %.64s (%.64s)",
+			    &nbuf[doff + 4], &nbuf[doff + 4 + 64]) == -1)
+				return -1;
+		}
+	}
+
 	return 0;
 }
 
-private int
+file_private int
 do_pax_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
     int swap, uint32_t namesz, uint32_t descsz,
     size_t noff, size_t doff, int *flags)
 {
-	if (namesz == 4 && strcmp((char *)&nbuf[noff], "PaX") == 0 &&
-	    type == NT_NETBSD_PAX && descsz == 4) {
+	const char *name = RCAST(const char *, &nbuf[noff]);
+
+	if (NAMEEQUALS(name, "PaX") && type == NT_NETBSD_PAX && descsz == 4) {
 		static const char *pax[] = {
 		    "+mprotect",
 		    "-mprotect",
@@ -653,30 +746,72 @@ do_pax_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 		int did = 0;
 
 		*flags |= FLAGS_DID_NETBSD_PAX;
-		(void)memcpy(&desc, &nbuf[doff], sizeof(desc));
+		memcpy(&desc, &nbuf[doff], sizeof(desc));
 		desc = elf_getu32(swap, desc);
 
-		if (desc && file_printf(ms, ", PaX: ") == -1)
-			return 1;
+		if (desc && elf_printf(ms, ", PaX: ") == -1)
+			return -1;
 
 		for (i = 0; i < __arraycount(pax); i++) {
-			if (((1 << (int)i) & desc) == 0)
+			if (((1 << CAST(int, i)) & desc) == 0)
 				continue;
-			if (file_printf(ms, "%s%s", did++ ? "," : "",
+			if (elf_printf(ms, "%s%s", did++ ? "," : "",
 			    pax[i]) == -1)
-				return 1;
+				return -1;
 		}
 		return 1;
 	}
 	return 0;
 }
 
-private int
+file_private int
+do_memtag_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
+    int swap, uint32_t namesz, uint32_t descsz,
+    size_t noff, size_t doff, int *flags)
+{
+	const char *name = RCAST(const char *, &nbuf[noff]);
+
+	if (NAMEEQUALS(name, "Android") &&
+	    type == NT_ANDROID_MEMTAG && descsz == 4) {
+		static const char *memtag[] = {
+		    "none",
+		    "async",
+		    "sync",
+		    "heap",
+		    "stack",
+		};
+		uint32_t desc;
+		size_t i;
+		int did = 0;
+
+		*flags |= FLAGS_DID_ANDROID_MEMTAG;
+		memcpy(&desc, &nbuf[doff], sizeof(desc));
+		desc = elf_getu32(swap, desc);
+
+		if (desc && elf_printf(ms, ", Android Memtag: ") == -1)
+			return -1;
+
+		for (i = 0; i < __arraycount(memtag); i++) {
+			if (((1 << CAST(int, i)) & desc) == 0)
+				continue;
+			if (elf_printf(ms, "%s%s", did++ ? "," : "",
+			    memtag[i]) == -1)
+				return -1;
+		}
+		return 1;
+	}
+	return 0;
+}
+
+file_private int
 do_core_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
     int swap, uint32_t namesz, uint32_t descsz,
     size_t noff, size_t doff, int *flags, size_t size, int clazz)
 {
 #ifdef ELFCORE
+	char buf[256];
+	const char *name = RCAST(const char *, &nbuf[noff]);
+
 	int os_style = -1;
 	/*
 	 * Sigh.  The 2.0.36 kernel in Debian 2.1, at
@@ -692,24 +827,23 @@ do_core_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 	 * doesn't include the terminating null in the
 	 * name....
 	 */
-	if ((namesz == 4 && strncmp((char *)&nbuf[noff], "CORE", 4) == 0) ||
-	    (namesz == 5 && strcmp((char *)&nbuf[noff], "CORE") == 0)) {
+	if ((namesz == 4 && memcmp(name, "CORE", 4) == 0) ||
+	    NAMEEQUALS(name, "CORE")) {
 		os_style = OS_STYLE_SVR4;
-	} 
+	}
 
-	if ((namesz == 8 && strcmp((char *)&nbuf[noff], "FreeBSD") == 0)) {
+	if (NAMEEQUALS(name, "FreeBSD")) {
 		os_style = OS_STYLE_FREEBSD;
 	}
 
-	if ((namesz >= 11 && strncmp((char *)&nbuf[noff], "NetBSD-CORE", 11)
-	    == 0)) {
+	if ((namesz >= 11 && memcmp(name, "NetBSD-CORE", 11) == 0)) {
 		os_style = OS_STYLE_NETBSD;
 	}
 
 	if (os_style != -1 && (*flags & FLAGS_DID_CORE_STYLE) == 0) {
-		if (file_printf(ms, ", %s-style", os_style_names[os_style])
+		if (elf_printf(ms, ", %s-style", os_style_names[os_style])
 		    == -1)
-			return 1;
+			return -1;
 		*flags |= FLAGS_DID_CORE_STYLE;
 		*flags |= os_style;
 	}
@@ -720,24 +854,48 @@ do_core_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 			char sbuf[512];
 			struct NetBSD_elfcore_procinfo pi;
 			memset(&pi, 0, sizeof(pi));
-			memcpy(&pi, nbuf + doff, descsz);
+			memcpy(&pi, nbuf + doff, MIN(descsz, sizeof(pi)));
 
-			if (file_printf(ms, ", from '%.31s', pid=%u, uid=%u, "
+			if (elf_printf(ms, ", from '%.31s', pid=%u, uid=%u, "
 			    "gid=%u, nlwps=%u, lwp=%u (signal %u/code %u)",
-			    file_printable(sbuf, sizeof(sbuf),
-			    CAST(char *, pi.cpi_name)),
-			    elf_getu32(swap, pi.cpi_pid),
+			    file_printable(ms, sbuf, sizeof(sbuf),
+			    RCAST(char *, pi.cpi_name), sizeof(pi.cpi_name)),
+			    elf_getu32(swap, CAST(uint32_t, pi.cpi_pid)),
 			    elf_getu32(swap, pi.cpi_euid),
 			    elf_getu32(swap, pi.cpi_egid),
 			    elf_getu32(swap, pi.cpi_nlwps),
-			    elf_getu32(swap, pi.cpi_siglwp),
+			    elf_getu32(swap, CAST(uint32_t, pi.cpi_siglwp)),
 			    elf_getu32(swap, pi.cpi_signo),
 			    elf_getu32(swap, pi.cpi_sigcode)) == -1)
-				return 1;
+				return -1;
 
 			*flags |= FLAGS_DID_CORE;
 			return 1;
 		}
+		break;
+
+	case OS_STYLE_FREEBSD:
+		if (type == NT_PRPSINFO && *flags & FLAGS_IS_CORE) {
+			size_t argoff, pidoff;
+
+			if (clazz == ELFCLASS32)
+				argoff = 4 + 4 + 17;
+			else
+				argoff = 4 + 4 + 8 + 17;
+			if (doff + argoff + 81 <= size) {
+				if (elf_printf(ms, ", from '%.80s'",
+				    nbuf + doff + argoff) == -1)
+					return -1;
+			}
+			pidoff = argoff + 81 + 2;
+			if (doff + pidoff + 4 <= size) {
+				if (elf_printf(ms, ", pid=%u",
+				    elf_getu32(swap, *RCAST(uint32_t *, (nbuf +
+				    doff + pidoff)))) == -1)
+					return -1;
+			}
+			*flags |= FLAGS_DID_CORE;
+		}			    
 		break;
 
 	default:
@@ -814,6 +972,13 @@ do_core_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 					int adjust = 1;
 					if (prpsoffsets(k) >= prpsoffsets(i))
 						continue;
+					/*
+					 * pr_fname == pr_psargs - 16 &&
+					 * non-nul-terminated fname (qemu)
+					 */
+					if (prpsoffsets(k) ==
+					    prpsoffsets(i) - 16 && j == 16)
+						continue;
 					for (no = doff + prpsoffsets(k);
 					     no < doff + prpsoffsets(i); no++)
 						adjust = adjust
@@ -822,9 +987,10 @@ do_core_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 						i = k;
 				}
 
-				cname = (unsigned char *)
-				    &nbuf[doff + prpsoffsets(i)];
-				for (cp = cname; *cp && isprint(*cp); cp++)
+				cname = CAST(unsigned char *,
+				    &nbuf[doff + prpsoffsets(i)]);
+				for (cp = cname; cp < nbuf + size && *cp
+				    && isprint(*cp); cp++)
 					continue;
 				/*
 				 * Linux apparently appends a space at the end
@@ -832,9 +998,11 @@ do_core_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 				 */
 				while (cp > cname && isspace(cp[-1]))
 					cp--;
-				if (file_printf(ms, ", from '%.*s'",
-				    (int)(cp - cname), cname) == -1)
-					return 1;
+				if (elf_printf(ms, ", from '%s'",
+				    file_copystr(buf, sizeof(buf),
+				    CAST(size_t, cp - cname),
+				    RCAST(char *, cname))) == -1)
+					return -1;
 				*flags |= FLAGS_DID_CORE;
 				return 1;
 
@@ -848,7 +1016,7 @@ do_core_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 	return 0;
 }
 
-private off_t
+file_private off_t
 get_offset_from_virtaddr(struct magic_set *ms, int swap, int clazz, int fd,
     off_t off, int num, off_t fsize, uint64_t virtaddr)
 {
@@ -860,9 +1028,14 @@ get_offset_from_virtaddr(struct magic_set *ms, int swap, int clazz, int fd,
 	 * virtual address in which the "virtaddr" belongs to.
 	 */
 	for ( ; num; num--) {
-		if (pread(fd, xph_addr, xph_sizeof, off) < (ssize_t)xph_sizeof) {
-			file_badread(ms);
-			return -1;
+		if (pread(fd, xph_addr, xph_sizeof, off) <
+		    CAST(ssize_t, xph_sizeof)) {
+			if (elf_printf(ms,
+			    ", can't read elf program header at %jd",
+			    (intmax_t)off) == -1)
+				return -1;
+			return 0;
+
 		}
 		off += xph_sizeof;
 
@@ -877,7 +1050,7 @@ get_offset_from_virtaddr(struct magic_set *ms, int swap, int clazz, int fd,
 	return 0;
 }
 
-private size_t
+file_private size_t
 get_string_on_virtaddr(struct magic_set *ms,
     int swap, int clazz, int fd, off_t ph_off, int ph_num,
     off_t fsize, uint64_t virtaddr, char *buf, ssize_t buflen)
@@ -890,8 +1063,10 @@ get_string_on_virtaddr(struct magic_set *ms,
 
 	offset = get_offset_from_virtaddr(ms, swap, clazz, fd, ph_off, ph_num,
 	    fsize, virtaddr);
-	if ((buflen = pread(fd, buf, CAST(size_t, buflen), offset)) <= 0) {
-		file_badread(ms);
+	if (offset < 0 ||
+	    (buflen = pread(fd, buf, CAST(size_t, buflen), offset)) <= 0) {
+		(void)elf_printf(ms, ", can't read elf string at %jd",
+		    (intmax_t)offset);
 		return 0;
 	}
 
@@ -899,7 +1074,7 @@ get_string_on_virtaddr(struct magic_set *ms,
 
 	/* We expect only printable characters, so return if buffer contains
 	 * non-printable character before the '\0' or just '\0'. */
-	for (bptr = buf; *bptr && isprint((unsigned char)*bptr); bptr++)
+	for (bptr = buf; *bptr && isprint(CAST(unsigned char, *bptr)); bptr++)
 		continue;
 	if (*bptr != '\0')
 		return 0;
@@ -908,7 +1083,8 @@ get_string_on_virtaddr(struct magic_set *ms,
 }
 
 
-private int
+/*ARGSUSED*/
+file_private int
 do_auxv_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
     int swap, uint32_t namesz __attribute__((__unused__)),
     uint32_t descsz __attribute__((__unused__)),
@@ -922,7 +1098,7 @@ do_auxv_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 	size_t elsize = xauxv_sizeof;
 	const char *tag;
 	int is_string;
-	size_t nval;
+	size_t nval, off;
 
 	if ((*flags & (FLAGS_IS_CORE|FLAGS_DID_CORE_STYLE)) !=
 	    (FLAGS_IS_CORE|FLAGS_DID_CORE_STYLE))
@@ -950,8 +1126,8 @@ do_auxv_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 	*flags |= FLAGS_DID_AUXV;
 
 	nval = 0;
-	for (size_t off = 0; off + elsize <= descsz; off += elsize) {
-		(void)memcpy(xauxv_addr, &nbuf[doff + off], xauxv_sizeof);
+	for (off = 0; off + elsize <= descsz; off += elsize) {
+		memcpy(xauxv_addr, &nbuf[doff + off], xauxv_sizeof);
 		/* Limit processing to 50 vector entries to prevent DoS */
 		if (nval++ >= 50) {
 			file_error(ms, 0, "Too many ELF Auxv elements");
@@ -1000,13 +1176,13 @@ do_auxv_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 
 			if (buflen == 0)
 				continue;
-			
-			if (file_printf(ms, ", %s: '%s'", tag, buf) == -1)
-				return 0;
+
+			if (elf_printf(ms, ", %s: '%s'", tag, buf) == -1)
+				return -1;
 		} else {
-			if (file_printf(ms, ", %s: %d", tag, (int) xauxv_val)
-			    == -1)
-				return 0;
+			if (elf_printf(ms, ", %s: %d", tag,
+			    CAST(int, xauxv_val)) == -1)
+				return -1;
 		}
 	}
 	return 1;
@@ -1015,7 +1191,43 @@ do_auxv_note(struct magic_set *ms, unsigned char *nbuf, uint32_t type,
 #endif
 }
 
-private size_t
+file_private size_t
+dodynamic(struct magic_set *ms, void *vbuf, size_t offset, size_t size,
+    int clazz, int swap, int *pie, size_t *need)
+{
+	Elf32_Dyn dh32;
+	Elf64_Dyn dh64;
+	unsigned char *dbuf = CAST(unsigned char *, vbuf);
+
+	if (xdh_sizeof + offset > size) {
+		/*
+		 * We're out of note headers.
+		 */
+		return xdh_sizeof + offset;
+	}
+
+	memcpy(xdh_addr, &dbuf[offset], xdh_sizeof);
+	offset += xdh_sizeof;
+
+	switch (xdh_tag) {
+	case DT_FLAGS_1:
+		if (xdh_val & DF_1_PIE) {
+			*pie = 1;
+			ms->mode |= 0111;
+		} else
+			ms->mode &= ~0111;
+		break;
+	case DT_NEEDED:
+		(*need)++;
+		break;
+	default:
+		break;
+	}
+	return offset;
+}
+
+
+file_private size_t
 donote(struct magic_set *ms, void *vbuf, size_t offset, size_t size,
     int clazz, int swap, size_t align, int *flags, uint16_t *notecount,
     int fd, off_t ph_off, int ph_num, off_t fsize)
@@ -1024,6 +1236,7 @@ donote(struct magic_set *ms, void *vbuf, size_t offset, size_t size,
 	Elf64_Nhdr nh64;
 	size_t noff, doff;
 	uint32_t namesz, descsz;
+	char buf[256];
 	unsigned char *nbuf = CAST(unsigned char *, vbuf);
 
 	if (*notecount == 0)
@@ -1036,8 +1249,11 @@ donote(struct magic_set *ms, void *vbuf, size_t offset, size_t size,
 		 */
 		return xnh_sizeof + offset;
 	}
+	/*XXX: GCC */
+	memset(&nh32, 0, sizeof(nh32));
+	memset(&nh64, 0, sizeof(nh64));
 
-	(void)memcpy(xnh_addr, &nbuf[offset], xnh_sizeof);
+	memcpy(xnh_addr, &nbuf[offset], xnh_sizeof);
 	offset += xnh_sizeof;
 
 	namesz = xnh_namesz;
@@ -1051,15 +1267,15 @@ donote(struct magic_set *ms, void *vbuf, size_t offset, size_t size,
 	}
 
 	if (namesz & 0x80000000) {
-	    (void)file_printf(ms, ", bad note name size %#lx",
-		(unsigned long)namesz);
+	    (void)elf_printf(ms, ", bad note name size %#lx",
+		CAST(unsigned long, namesz));
 	    return 0;
 	}
 
 	if (descsz & 0x80000000) {
-	    (void)file_printf(ms, ", bad note description size %#lx",
-		(unsigned long)descsz);
-	    return 0;
+		(void)elf_printf(ms, ", bad note description size %#lx",
+		    CAST(unsigned long, descsz));
+		return 0;
 	}
 
 	noff = offset;
@@ -1092,9 +1308,14 @@ donote(struct magic_set *ms, void *vbuf, size_t offset, size_t size,
 		    namesz, descsz, noff, doff, flags))
 			return offset;
 	}
-		
+
 	if ((*flags & FLAGS_DID_NETBSD_PAX) == 0) {
 		if (do_pax_note(ms, nbuf, xnh_type, swap,
+		    namesz, descsz, noff, doff, flags))
+			return offset;
+	}
+	if ((*flags & FLAGS_DID_ANDROID_MEMTAG) == 0) {
+		if (do_memtag_note(ms, nbuf, xnh_type, swap,
 		    namesz, descsz, noff, doff, flags))
 			return offset;
 	}
@@ -1112,36 +1333,42 @@ donote(struct magic_set *ms, void *vbuf, size_t offset, size_t size,
 			return offset;
 	}
 
-	if (namesz == 7 && strcmp((char *)&nbuf[noff], "NetBSD") == 0) {
+	if (NAMEEQUALS(RCAST(char *, &nbuf[noff]), "NetBSD")) {
+		int descw, flag;
+		const char *str, *tag;
 		if (descsz > 100)
 			descsz = 100;
 		switch (xnh_type) {
 	    	case NT_NETBSD_VERSION:
 			return offset;
 		case NT_NETBSD_MARCH:
-			if (*flags & FLAGS_DID_NETBSD_MARCH)
-				return offset;
-			*flags |= FLAGS_DID_NETBSD_MARCH;
-			if (file_printf(ms, ", compiled for: %.*s",
-			    (int)descsz, (const char *)&nbuf[doff]) == -1)
-				return offset;
+			flag = FLAGS_DID_NETBSD_MARCH;
+			tag = "compiled for";
 			break;
 		case NT_NETBSD_CMODEL:
-			if (*flags & FLAGS_DID_NETBSD_CMODEL)
-				return offset;
-			*flags |= FLAGS_DID_NETBSD_CMODEL;
-			if (file_printf(ms, ", compiler model: %.*s",
-			    (int)descsz, (const char *)&nbuf[doff]) == -1)
-				return offset;
+			flag = FLAGS_DID_NETBSD_CMODEL;
+			tag = "compiler model";
+			break;
+		case NT_NETBSD_EMULATION:
+			flag = FLAGS_DID_NETBSD_EMULATION;
+			tag = "emulation:";
 			break;
 		default:
 			if (*flags & FLAGS_DID_NETBSD_UNKNOWN)
 				return offset;
 			*flags |= FLAGS_DID_NETBSD_UNKNOWN;
-			if (file_printf(ms, ", note=%u", xnh_type) == -1)
+			if (elf_printf(ms, ", note=%u", xnh_type) == -1)
 				return offset;
-			break;
+			return offset;
 		}
+
+		if (*flags & flag)
+			return offset;
+		str = RCAST(const char *, &nbuf[doff]);
+		descw = CAST(int, descsz);
+		*flags |= flag;
+		elf_printf(ms, ", %s: %s", tag,
+		    file_copystr(buf, sizeof(buf), descw, str));
 		return offset;
 	}
 
@@ -1198,7 +1425,7 @@ static const cap_desc_t cap_desc_386[] = {
 	{ 0, NULL }
 };
 
-private int
+file_private int
 doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
     size_t size, off_t fsize, int mach, int strtab, int *flags,
     uint16_t *notecount)
@@ -1208,32 +1435,53 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 	int stripped = 1, has_debug_info = 0;
 	size_t nbadcap = 0;
 	void *nbuf;
-	off_t noff, coff, name_off;
+	off_t noff, coff, name_off, offs;
 	uint64_t cap_hw1 = 0;	/* SunOS 5.x hardware capabilities */
 	uint64_t cap_sf1 = 0;	/* SunOS 5.x software capabilities */
 	char name[50];
 	ssize_t namesize;
 
+	if (ms->flags & MAGIC_MIME)
+		return 0;
+
+	if (num == 0) {
+		if (elf_printf(ms, ", no section header") == -1)
+			return -1;
+		return 0;
+	}
 	if (size != xsh_sizeof) {
-		if (file_printf(ms, ", corrupted section header size") == -1)
+		if (elf_printf(ms, ", corrupted section header size") == -1)
 			return -1;
 		return 0;
 	}
 
 	/* Read offset of name section to be able to read section names later */
-	if (pread(fd, xsh_addr, xsh_sizeof, CAST(off_t, (off + size * strtab)))
-	    < (ssize_t)xsh_sizeof) {
-		if (file_printf(ms, ", missing section headers") == -1)
+	offs = CAST(off_t, (off + size * strtab));
+	if (pread(fd, xsh_addr, xsh_sizeof, offs) < CAST(ssize_t, xsh_sizeof)) {
+		if (elf_printf(ms, ", missing section headers at %jd",
+		    (intmax_t)offs) == -1)
 			return -1;
 		return 0;
 	}
 	name_off = xsh_offset;
 
+	if (fsize != SIZE_UNKNOWN && fsize < name_off) {
+		if (elf_printf(ms, ", too large section header offset %jd",
+		    (intmax_t)name_off) == -1)
+			return -1;
+		return 0;
+	}
+
 	for ( ; num; num--) {
 		/* Read the name of this section. */
-		if ((namesize = pread(fd, name, sizeof(name) - 1, name_off + xsh_name)) == -1) {
-			file_badread(ms);
-			return -1;
+		offs = name_off + xsh_name;
+		if ((namesize = pread(fd, name, sizeof(name) - 1, offs))
+		    == -1) {
+			if (elf_printf(ms, 
+			    ", can't read name of elf section at %jd",
+			    (intmax_t)offs) == -1)
+				return -1;
+			return 0;
 		}
 		name[namesize] = '\0';
 		if (strcmp(name, ".debug_info") == 0) {
@@ -1241,9 +1489,12 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 			stripped = 0;
 		}
 
-		if (pread(fd, xsh_addr, xsh_sizeof, off) < (ssize_t)xsh_sizeof) {
-			file_badread(ms);
-			return -1;
+		if (pread(fd, xsh_addr, xsh_sizeof, off) <
+		    CAST(ssize_t, xsh_sizeof)) {
+			if (elf_printf(ms, ", can't read elf section at %jd",
+			    (intmax_t)off) == -1)
+				return -1;
+			return 0;
 		}
 		off += size;
 
@@ -1267,34 +1518,45 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 		/* Things we can determine when we seek */
 		switch (xsh_type) {
 		case SHT_NOTE:
-			if ((uintmax_t)(xsh_size + xsh_offset) >
-			    (uintmax_t)fsize) {
-				if (file_printf(ms,
+			if (CAST(uintmax_t, (xsh_size + xsh_offset)) >
+			    CAST(uintmax_t, fsize)) {
+				if (elf_printf(ms,
 				    ", note offset/size %#" INTMAX_T_FORMAT
 				    "x+%#" INTMAX_T_FORMAT "x exceeds"
 				    " file size %#" INTMAX_T_FORMAT "x",
-				    (uintmax_t)xsh_offset, (uintmax_t)xsh_size,
-				    (uintmax_t)fsize) == -1)
+				    CAST(uintmax_t, xsh_offset),
+				    CAST(uintmax_t, xsh_size),
+				    CAST(uintmax_t, fsize)) == -1)
 					return -1;
-				return 0; 
+				return 0;
+			}
+			if (xsh_size > ms->elf_shsize_max) {
+				file_error(ms, errno, "Note section size too "
+				    "big (%ju > %zu)", (uintmax_t)xsh_size,
+				    ms->elf_shsize_max);
+				return -1;
 			}
 			if ((nbuf = malloc(xsh_size)) == NULL) {
 				file_error(ms, errno, "Cannot allocate memory"
 				    " for note");
 				return -1;
 			}
-			if (pread(fd, nbuf, xsh_size, xsh_offset) <
-			    (ssize_t)xsh_size) {
-				file_badread(ms);
+			offs = xsh_offset;
+			if (pread(fd, nbuf, xsh_size, offs) <
+			    CAST(ssize_t, xsh_size)) {
 				free(nbuf);
-				return -1;
+				if (elf_printf(ms,
+				    ", can't read elf note at %jd",
+				    (intmax_t)offs) == -1)
+					return -1;
+				return 0;
 			}
 
 			noff = 0;
 			for (;;) {
-				if (noff >= (off_t)xsh_size)
+				if (noff >= CAST(off_t, xsh_size))
 					break;
-				noff = donote(ms, nbuf, (size_t)noff,
+				noff = donote(ms, nbuf, CAST(size_t, noff),
 				    xsh_size, clazz, swap, 4, flags, notecount,
 				    fd, 0, 0, 0);
 				if (noff == 0)
@@ -1316,7 +1578,8 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 
 			if (nbadcap > 5)
 				break;
-			if (lseek(fd, xsh_offset, SEEK_SET) == (off_t)-1) {
+			if (lseek(fd, xsh_offset, SEEK_SET)
+			    == CAST(off_t, -1)) {
 				file_badseek(ms);
 				return -1;
 			}
@@ -1324,12 +1587,15 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 			for (;;) {
 				Elf32_Cap cap32;
 				Elf64_Cap cap64;
+				cap32.c_un.c_val = 0;
+				cap64.c_un.c_val = 0;
 				char cbuf[/*CONSTCOND*/
-				    MAX(sizeof cap32, sizeof cap64)];
-				if ((coff += xcap_sizeof) > (off_t)xsh_size)
+				    MAX(sizeof(cap32), sizeof(cap64))];
+				if ((coff += xcap_sizeof) >
+				    CAST(off_t, xsh_size))
 					break;
-				if (read(fd, cbuf, (size_t)xcap_sizeof) !=
-				    (ssize_t)xcap_sizeof) {
+				if (read(fd, cbuf, CAST(size_t, xcap_sizeof)) !=
+				    CAST(ssize_t, xcap_sizeof)) {
 					file_badread(ms);
 					return -1;
 				}
@@ -1341,7 +1607,7 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 					p += 4;
 					len = getu32(swap, len);
 					if (memcmp("gnu", p, 3) != 0) {
-					    if (file_printf(ms,
+					    if (elf_printf(ms,
 						", unknown capability %.3s", p)
 						== -1)
 						return -1;
@@ -1353,17 +1619,17 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 					p += 4;
 					len = getu32(swap, len);
 					if (tag != 1) {
-					    if (file_printf(ms, ", unknown gnu"
+					    if (elf_printf(ms, ", unknown gnu"
 						" capability tag %d", tag)
 						== -1)
 						return -1;
 					    break;
 					}
-					// gnu attributes 
+					// gnu attributes
 #endif
 					break;
 				}
-				(void)memcpy(xcap_addr, cbuf, xcap_sizeof);
+				memcpy(xcap_addr, cbuf, xcap_sizeof);
 				switch (xcap_tag) {
 				case CA_SUNW_NULL:
 					break;
@@ -1374,15 +1640,16 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 					cap_sf1 |= xcap_val;
 					break;
 				default:
-					if (file_printf(ms,
+					if (elf_printf(ms,
 					    ", with unknown capability "
 					    "%#" INT64_T_FORMAT "x = %#"
 					    INT64_T_FORMAT "x",
-					    (unsigned long long)xcap_tag,
-					    (unsigned long long)xcap_val) == -1)
+					    CAST(unsigned long long, xcap_tag),
+					    CAST(unsigned long long, xcap_val))
+					    == -1)
 						return -1;
 					if (nbadcap++ > 2)
-						coff = xsh_size;
+						goto skip;
 					break;
 				}
 			}
@@ -1394,10 +1661,10 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 	}
 
 	if (has_debug_info) {
-		if (file_printf(ms, ", with debug_info") == -1)
+		if (elf_printf(ms, ", with debug_info") == -1)
 			return -1;
 	}
-	if (file_printf(ms, ", %sstripped", stripped ? "" : "not ") == -1)
+	if (elf_printf(ms, ", %sstripped", stripped ? "" : "not ") == -1)
 		return -1;
 	if (cap_hw1) {
 		const cap_desc_t *cdp;
@@ -1416,12 +1683,12 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 			cdp = NULL;
 			break;
 		}
-		if (file_printf(ms, ", uses") == -1)
+		if (elf_printf(ms, ", uses") == -1)
 			return -1;
 		if (cdp) {
 			while (cdp->cd_name) {
 				if (cap_hw1 & cdp->cd_mask) {
-					if (file_printf(ms,
+					if (elf_printf(ms,
 					    " %s", cdp->cd_name) == -1)
 						return -1;
 					cap_hw1 &= ~cdp->cd_mask;
@@ -1429,21 +1696,21 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 				++cdp;
 			}
 			if (cap_hw1)
-				if (file_printf(ms,
+				if (elf_printf(ms,
 				    " unknown hardware capability %#"
 				    INT64_T_FORMAT "x",
-				    (unsigned long long)cap_hw1) == -1)
+				    CAST(unsigned long long, cap_hw1)) == -1)
 					return -1;
 		} else {
-			if (file_printf(ms,
+			if (elf_printf(ms,
 			    " hardware capability %#" INT64_T_FORMAT "x",
-			    (unsigned long long)cap_hw1) == -1)
+			    CAST(unsigned long long, cap_hw1)) == -1)
 				return -1;
 		}
 	}
 	if (cap_sf1) {
 		if (cap_sf1 & SF1_SUNW_FPUSED) {
-			if (file_printf(ms,
+			if (elf_printf(ms,
 			    (cap_sf1 & SF1_SUNW_FPKNWN)
 			    ? ", uses frame pointer"
 			    : ", not known to use frame pointer") == -1)
@@ -1451,44 +1718,56 @@ doshn(struct magic_set *ms, int clazz, int swap, int fd, off_t off, int num,
 		}
 		cap_sf1 &= ~SF1_SUNW_MASK;
 		if (cap_sf1)
-			if (file_printf(ms,
+			if (elf_printf(ms,
 			    ", with unknown software capability %#"
 			    INT64_T_FORMAT "x",
-			    (unsigned long long)cap_sf1) == -1)
+			    CAST(unsigned long long, cap_sf1)) == -1)
 				return -1;
 	}
 	return 0;
 }
 
 /*
- * Look through the program headers of an executable image, searching
- * for a PT_INTERP section; if one is found, it's dynamically linked,
- * otherwise it's statically linked.
+ * Look through the program headers of an executable image, to determine
+ * if it is statically or dynamically linked. If it has a dynamic section,
+ * it is pie, and does not have an interpreter or needed libraries, we
+ * call it static pie.
  */
-private int
+file_private int
 dophn_exec(struct magic_set *ms, int clazz, int swap, int fd, off_t off,
     int num, size_t size, off_t fsize, int sh_num, int *flags,
     uint16_t *notecount)
 {
 	Elf32_Phdr ph32;
 	Elf64_Phdr ph64;
-	const char *linking_style = "statically";
-	const char *interp = "";
-	unsigned char nbuf[BUFSIZ];
-	char ibuf[BUFSIZ];
+	const char *str;
+	unsigned char nbuf[NBUFSIZE];
+	char interp[NBUFSIZE];
 	ssize_t bufsize;
-	size_t offset, align, len;
-	
+	size_t offset, align, need = 0;
+	int pie = 0, dynamic = 0;
+
+	if (num == 0) {
+		if (elf_printf(ms, ", no program header") == -1)
+			return -1;
+		return 0;
+	}
 	if (size != xph_sizeof) {
-		if (file_printf(ms, ", corrupted program header size") == -1)
+		if (elf_printf(ms, ", corrupted program header size") == -1)
 			return -1;
 		return 0;
 	}
 
+	interp[0] = '\0';
   	for ( ; num; num--) {
-		if (pread(fd, xph_addr, xph_sizeof, off) < (ssize_t)xph_sizeof) {
-			file_badread(ms);
-			return -1;
+		int doread;
+		if (pread(fd, xph_addr, xph_sizeof, off) <
+		    CAST(ssize_t, xph_sizeof)) {
+			if (elf_printf(ms,
+			    ", can't read elf program headers at %jd",
+			    (intmax_t)off) == -1)
+				return -1;
+			return 0;
 		}
 
 		off += size;
@@ -1498,30 +1777,25 @@ dophn_exec(struct magic_set *ms, int clazz, int swap, int fd, off_t off,
 		/* Things we can determine before we seek */
 		switch (xph_type) {
 		case PT_DYNAMIC:
-			linking_style = "dynamically";
+			doread = 1;
 			break;
 		case PT_NOTE:
 			if (sh_num)	/* Did this through section headers */
 				continue;
 			if (((align = xph_align) & 0x80000000UL) != 0 ||
 			    align < 4) {
-				if (file_printf(ms, 
+				if (elf_printf(ms,
 				    ", invalid note alignment %#lx",
-				    (unsigned long)align) == -1)
+				    CAST(unsigned long, align)) == -1)
 					return -1;
 				align = 4;
 			}
 			/*FALLTHROUGH*/
 		case PT_INTERP:
-			len = xph_filesz < sizeof(nbuf) ? xph_filesz
-			    : sizeof(nbuf);
-			bufsize = pread(fd, nbuf, len, xph_offset);
-			if (bufsize == -1) {
-				file_badread(ms);
-				return -1;
-			}
+			doread = 1;
 			break;
 		default:
+			doread = 0;
 			if (fsize != SIZE_UNKNOWN && xph_offset > fsize) {
 				/* Maybe warn here? */
 				continue;
@@ -1529,71 +1803,123 @@ dophn_exec(struct magic_set *ms, int clazz, int swap, int fd, off_t off,
 			break;
 		}
 
+		if (doread) {
+			size_t len = xph_filesz < sizeof(nbuf) ? xph_filesz
+			    : sizeof(nbuf);
+			off_t offs = xph_offset;
+			bufsize = pread(fd, nbuf, len, offs);
+			if (bufsize == -1) {
+				if (elf_printf(ms,
+				    ", can't read section at %jd",
+				    (intmax_t)offs) == -1)
+					return -1;
+				return 0;
+			}
+		}
+
 		/* Things we can determine when we seek */
 		switch (xph_type) {
+		case PT_DYNAMIC:
+			dynamic = 1;
+			offset = 0;
+			// Let DF_1 determine if we are PIE or not.
+			ms->mode &= ~0111;
+			for (;;) {
+				if (offset >= CAST(size_t, bufsize))
+					break;
+				offset = dodynamic(ms, nbuf, offset,
+				    CAST(size_t, bufsize), clazz, swap,
+				    &pie, &need);
+				if (offset == 0)
+					break;
+			}
+			break;
+
 		case PT_INTERP:
+			need++;
+			if (ms->flags & MAGIC_MIME)
+				continue;
 			if (bufsize && nbuf[0]) {
 				nbuf[bufsize - 1] = '\0';
-				interp = (const char *)nbuf;
+				str = RCAST(const char *, nbuf);
 			} else
-				interp = "*empty*";
+				str = "*empty*";
+			strlcpy(interp, str, sizeof(interp));
 			break;
 		case PT_NOTE:
+			if (ms->flags & MAGIC_MIME)
+				return 0;
 			/*
 			 * This is a PT_NOTE section; loop through all the notes
 			 * in the section.
 			 */
 			offset = 0;
 			for (;;) {
-				if (offset >= (size_t)bufsize)
+				if (offset >= CAST(size_t, bufsize))
 					break;
 				offset = donote(ms, nbuf, offset,
-				    (size_t)bufsize, clazz, swap, align,
+				    CAST(size_t, bufsize), clazz, swap, align,
 				    flags, notecount, fd, 0, 0, 0);
 				if (offset == 0)
 					break;
 			}
 			break;
 		default:
+			if (ms->flags & MAGIC_MIME)
+				continue;
 			break;
 		}
 	}
-	if (file_printf(ms, ", %s linked", linking_style)
-	    == -1)
+	if (ms->flags & MAGIC_MIME)
+		return 0;
+	if (dynamic) {
+		if (pie && need == 0)
+			str = "static-pie";
+		else
+			str = "dynamically";
+	} else {
+		str = "statically";
+	}
+	if (elf_printf(ms, ", %s linked", str) == -1)
 		return -1;
 	if (interp[0])
-		if (file_printf(ms, ", interpreter %s",
-		    file_printable(ibuf, sizeof(ibuf), interp)) == -1)
+		if (elf_printf(ms, ", interpreter %s", file_printable(ms,
+		    RCAST(char *, nbuf), sizeof(nbuf),
+		    interp, sizeof(interp))) == -1)
 			return -1;
 	return 0;
 }
 
 
-protected int
-file_tryelf(struct magic_set *ms, int fd, const unsigned char *buf,
-    size_t nbytes)
+file_protected int
+file_tryelf(struct magic_set *ms, const struct buffer *b)
 {
+	int fd = b->fd;
+	const unsigned char *buf = CAST(const unsigned char *, b->fbuf);
+	size_t nbytes = b->flen;
 	union {
 		int32_t l;
-		char c[sizeof (int32_t)];
+		char c[sizeof(int32_t)];
 	} u;
 	int clazz;
 	int swap;
 	struct stat st;
+	const struct stat *stp;
 	off_t fsize;
 	int flags = 0;
 	Elf32_Ehdr elf32hdr;
 	Elf64_Ehdr elf64hdr;
 	uint16_t type, phnum, shnum, notecount;
 
-	if (ms->flags & (MAGIC_MIME|MAGIC_APPLE|MAGIC_EXTENSION))
+	if (ms->flags & (MAGIC_APPLE|MAGIC_EXTENSION))
 		return 0;
 	/*
 	 * ELF executables have multiple section headers in arbitrary
 	 * file locations and thus file(1) cannot determine it from easily.
 	 * Instead we traverse thru all section headers until a symbol table
 	 * one is found or else the binary is stripped.
-	 * Return immediately if it's not ELF (so we avoid pipe2file unless needed).
+	 * Return immediately if it's not ELF (so we avoid pipe2file unless
+	 * needed).
 	 */
 	if (buf[EI_MAG0] != ELFMAG0
 	    || (buf[EI_MAG1] != ELFMAG1 && buf[EI_MAG1] != OLFMAG1)
@@ -1603,15 +1929,29 @@ file_tryelf(struct magic_set *ms, int fd, const unsigned char *buf,
 	/*
 	 * If we cannot seek, it must be a pipe, socket or fifo.
 	 */
-	if((lseek(fd, (off_t)0, SEEK_SET) == (off_t)-1) && (errno == ESPIPE))
+	if((lseek(fd, CAST(off_t, 0), SEEK_SET) == CAST(off_t, -1))
+	    && (errno == ESPIPE))
 		fd = file_pipe2file(ms, fd, buf, nbytes);
 
-	if (fstat(fd, &st) == -1) {
-  		file_badread(ms);
+	if (fd == -1) {
+		file_badread(ms);
 		return -1;
 	}
-	if (S_ISREG(st.st_mode) || st.st_size != 0)
-		fsize = st.st_size;
+
+	stp = &b->st;
+	/*
+	 * b->st.st_size != 0 if previous fstat() succeeded,
+	 * which is likely, we can avoid extra stat() call.
+	 */
+	if (b->st.st_size == 0) {
+		stp = &st;
+		if (fstat(fd, &st) == -1) {
+			file_badread(ms);
+			return -1;
+		}
+	}
+	if (S_ISREG(stp->st_mode) || stp->st_size != 0)
+		fsize = stp->st_size;
 	else
 		fsize = SIZE_UNKNOWN;
 
@@ -1631,7 +1971,7 @@ file_tryelf(struct magic_set *ms, int fd, const unsigned char *buf,
 #define elfhdr elf64hdr
 #include "elfclass.h"
 	default:
-	    if (file_printf(ms, ", unknown class %d", clazz) == -1)
+	    if (elf_printf(ms, ", unknown class %d", clazz) == -1)
 		    return -1;
 	    break;
 	}

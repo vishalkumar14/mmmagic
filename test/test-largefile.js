@@ -75,8 +75,9 @@ test(`detectFile on a ${SIZE_MB} MB CSV stays under ${RSS_BUDGET_MB} MB RSS grow
 
     console.log(`    fixture ${actualMb.toFixed(1)} MB | RSS +${grew.toFixed(1)} MB | ${elapsed} ms | ${result}`);
 
-    // The whole point: a signature-free 100 MB+ CSV is still text/plain.
-    assert.strictEqual(result, 'text/plain');
+    // The whole point: a signature-free 100 MB+ CSV is classified without
+    // reading it all into memory.
+    assert.strictEqual(result, 'text/csv');
     assert.ok(grew < RSS_BUDGET_MB,
       `detectFile grew RSS by ${grew.toFixed(1)} MB (budget ${RSS_BUDGET_MB} MB) — ` +
       'it looks like the whole file is being read into memory');
@@ -101,5 +102,5 @@ test('detect(Buffer) is the path that does hold the whole payload',
     const result = await new Promise((resolve, reject) => {
       new mmm.Magic(mmm.MAGIC_MIME_TYPE).detect(buf, (e, r) => e ? reject(e) : resolve(r));
     });
-    assert.strictEqual(result, 'text/plain');
+    assert.strictEqual(result, 'text/csv');
   });

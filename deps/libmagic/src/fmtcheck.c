@@ -29,6 +29,9 @@
  */
 
 #include "file.h"
+#ifndef lint
+FILE_RCSID("@(#)$File: fmtcheck.c,v 1.6 2022/09/24 20:30:13 christos Exp $")
+#endif /* lint */
 
 #include <stdio.h>
 #include <string.h>
@@ -235,7 +238,7 @@ fmtcheck(const char *f1, const char *f2)
 	EFT		f1t, f2t;
 
 	if (!f1) return f2;
-	
+
 	f1p = f1;
 	f1t = FMTCHECK_START;
 	f2p = f2;

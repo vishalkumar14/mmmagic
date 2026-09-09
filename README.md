@@ -10,7 +10,7 @@ const mmm = require('@vishalkumar14/mmmagic');
 
 const magic = new mmm.Magic(mmm.MAGIC_MIME_TYPE);
 const type  = await magic.detectFile('/tmp/upload.csv');
-// 'text/plain'
+// 'text/csv'
 ```
 
 **Why content and not the extension?** Because a user can rename `virus.exe` to
@@ -18,8 +18,8 @@ const type  = await magic.detectFile('/tmp/upload.csv');
 
 **Why not `file-type` or `isbinaryfile`?** They match magic-byte signatures. A
 plain text or CSV file has no signature at all, so they cannot classify it.
-libmagic falls back to text heuristics and returns `text/plain`, which is
-exactly what CSV upload validation needs.
+libmagic parses the content instead — a CSV comes back `text/csv` only if it
+really parses as CSV, so a `.txt` renamed to `.csv` does not slip through.
 
 ---
 
@@ -112,7 +112,7 @@ await magic.detectFile('/tmp/utf16.csv');     // 'utf-16le'
 
 ```javascript
 const magic = new mmm.Magic(mmm.MAGIC_MIME);  // TYPE | ENCODING
-await magic.detectFile('/tmp/data.csv');      // 'text/plain; charset=us-ascii'
+await magic.detectFile('/tmp/data.csv');      // 'text/csv; charset=us-ascii'
 ```
 
 ### 4. Human-readable description (the default)
@@ -192,25 +192,28 @@ never consulted.
 ## What gets detected
 
 Every row below is asserted by the test suite against the bundled libmagic
-**5.32**. Newer libmagic returns different strings for some of these.
+**5.48**.
 
 ### Text
 
 | File | `MAGIC_MIME_TYPE` | `MAGIC_MIME_ENCODING` |
 |---|---|---|
 | `.txt` plain text | `text/plain` | `us-ascii` |
-| `.csv` comma-separated | `text/plain` | `us-ascii` |
-| `.csv` with CRLF | `text/plain` | `us-ascii` |
-| `.csv` UTF-8 with BOM | `text/plain` | `utf-8` |
-| `.csv` UTF-16 | `text/plain` | `utf-16le` |
-| `.json` | `text/plain` | `us-ascii` |
+| `.csv` comma-separated | `text/csv` | `us-ascii` |
+| `.csv` with CRLF | `text/csv` | `us-ascii` |
+| `.csv` UTF-8 with BOM | `text/csv` | `utf-8` |
+| `.csv` UTF-16 | `text/csv` | `utf-16le` |
+| `.json` | `application/json` | `us-ascii` |
 | `.xml` | `text/xml` | `us-ascii` |
 | `.html` | `text/html` | `us-ascii` |
 | `.svg` | `image/svg+xml` | `us-ascii` |
 
-> **CSV and JSON come back as `text/plain`, not `text/csv` / `application/json`.**
-> libmagic 5.32 has no CSV or JSON detector, so they fall through to the text
-> heuristics. This is the behaviour existing callers depend on.
+> **Semicolon-delimited CSV is still `text/plain`.** libmagic parses
+> comma-separated files, but not the European semicolon convention. If you
+> accept those, handle them yourself.
+>
+> Upgrading from 1.x? CSV and JSON used to come back as `text/plain`. See
+> [CHANGELOG.md](CHANGELOG.md) for the full list and the opt-out flag.
 
 ### Images
 
@@ -221,8 +224,8 @@ Every row below is asserted by the test suite against the bundled libmagic
 | `.gif` (87a and 89a) | `image/gif` |
 | `.tif` | `image/tiff` |
 | `.webp` | `image/webp` |
-| `.bmp` | `image/x-ms-bmp` |
-| `.ico` | `image/x-icon` |
+| `.bmp` | `image/bmp` |
+| `.ico` | `image/vnd.microsoft.icon` |
 
 ### Documents and archives
 
@@ -231,7 +234,7 @@ Every row below is asserted by the test suite against the bundled libmagic
 | `.pdf` | `application/pdf` |
 | `.zip` | `application/zip` |
 | `.tar` | `application/x-tar` |
-| `.gz` | `application/x-gzip` |
+| `.gz` | `application/gzip` |
 | `.xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
 | `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` |
 | `.pptx` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` |
@@ -429,8 +432,8 @@ VS 2019 (16.11+) also works. Keep the checkout path short — MSVC still hits th
 
 | Component | Version | Notes |
 |---|---|---|
-| **libmagic** | **5.32** (2018) | Vendored in `deps/libmagic`. Deliberately not upgraded — see below |
-| Magic database | `magic/magic.mgc`, 4.7 MB, format v14 | Must match the libmagic version |
+| **libmagic** | **5.48** | Vendored in `deps/libmagic` — see below |
+| Magic database | `magic/magic.mgc`, 10.8 MB, format v21 | Must match the libmagic version |
 | `node-addon-api` | `^8.9.2` | C++ wrapper over Node-API |
 | `node-gyp-build` | `^4.8.4` | Picks prebuilt binary, else local build |
 | Node-API level | `NAPI_VERSION=8` | Keeps the binary loadable on a wide Node range |
@@ -439,11 +442,15 @@ VS 2019 (16.11+) also works. Keep the checkout path short — MSVC still hits th
 
 No runtime dependency on `nan` — this fork was ported from NAN to Node-API.
 
-### Why libmagic is still 5.32
+### Why libmagic 5.48
 
-Upgrading to 5.48 **changes results callers depend on**: CSV becomes `text/csv`
-and JSON becomes `application/json`. Three backend upload validators compare
-against `'text/plain'` and would start rejecting every CSV.
+5.32 had no CSV or JSON parser, so those files fell through to the generic text
+heuristics and came back `text/plain` — meaning any text file passed as a CSV.
+5.48 parses the content, so the answer means something.
+
+That changed eight results, which is why 2.0.0 is a major version.
+[CHANGELOG.md](CHANGELOG.md) lists every one, and
+`MAGIC_NO_CHECK_CSV` restores the old answer if you need to migrate gradually.
 
 ---
 
@@ -466,12 +473,13 @@ the full 120 MB.
 
 ```javascript
 await new mmm.Magic(mmm.MAGIC_MIME_ENCODING).detectFile('x.tar');
-// 'application/x-tarbinary'   <- should be 'binary'
+// 'binary'
 ```
 
-An upstream libmagic 5.32 bug (`is_tar.c` tests both MIME bits instead of the
-type bit). Fixed in newer libmagic. Use `MAGIC_MIME` or `MAGIC_MIME_TYPE`, both
-of which are correct. Pinned by a test so a version bump surfaces it.
+Fixed as of 2.0.0. Up to 5.32 this returned the run-together
+`application/x-tarbinary`, because `is_tar.c` tested both MIME bits instead of
+the type bit and leaked the type into the encoding. A test pins the correct
+answer so it cannot regress.
 
 ### Office files are detected by entry order
 
@@ -483,9 +491,10 @@ rely on this alone to validate a spreadsheet upload.
 
 ### Semicolon-delimited CSV
 
-`a;b;c` is `text/plain`, same as comma-delimited — libmagic 5.32 has no CSV
-detector at all. (Newer libmagic detects comma CSV as `text/csv` but still
-reports semicolon-delimited as `text/plain`.)
+`a;b;c` comes back `text/plain`, not `text/csv`. libmagic's CSV parser only
+recognises the comma-delimited form, so the European semicolon convention still
+falls through to the text heuristics. If you accept those files, check for them
+yourself — a `text/csv` test alone will reject them.
 
 ### Non-ASCII filenames on Windows
 
