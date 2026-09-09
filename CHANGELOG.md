@@ -7,6 +7,43 @@ and this package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.0.1] — 2026-09-10
+
+Compatibility fix for macOS. No change to detection results or the API.
+
+### Fixed
+
+- **The macOS binaries required macOS 13.5 (Ventura).** Nothing needed that —
+  `binding.gyp` left `MACOSX_DEPLOYMENT_TARGET` unset, so the binary inherited
+  whatever SDK the CI runner defaulted to. Users on **Monterey or Big Sur** got
+  a source build instead of a working install, reported as "needs a compiler"
+  with nothing pointing at the real cause.
+
+  The target is now pinned to **11.0**, the first release supporting Apple
+  Silicon — no arm64 Mac is excluded, and Intel Macs reach back to 2020.
+
+  If you are on macOS 13.5 or newer, nothing changes for you.
+
+### Documentation
+
+- Added a **Minimum OS versions** table. The floors were previously either
+  undocumented or spread out:
+
+  | Platform | Minimum |
+  |---|---|
+  | Linux glibc | glibc 2.28 |
+  | Linux musl | Alpine 3.19+ |
+  | macOS | 11.0 Big Sur |
+  | Windows | Windows 10+ |
+
+- Clarified that **Node-API 8 works from Node 12.22 onward**, so the Node
+  version is rarely what stops an install — the OS usually is. Verified the
+  prebuilt binary loads on Node 14, 16, 18, 20, 22 and 24.
+- Corrected stale counts (20 → 23 constants, 35 → 38 assertions) and documented
+  the three `MAGIC_NO_CHECK_*` flags added in 2.0.0.
+
+---
+
 ## [2.0.0] — 2026-09-09
 
 Upgrades the bundled libmagic from **5.32 (2018) to 5.48**, sixteen releases
@@ -140,6 +177,7 @@ First public release.
 - Platforms without a prebuilt binary still work — they compile from source at
   install time, which needs Python 3 and a C++ compiler.
 
+[2.0.1]: https://github.com/vishalkumar14/mmmagic/releases/tag/v2.0.1
 [2.0.0]: https://github.com/vishalkumar14/mmmagic/releases/tag/v2.0.0
 [1.0.1]: https://github.com/vishalkumar14/mmmagic/releases/tag/v1.0.1
 [1.0.0]: https://github.com/vishalkumar14/mmmagic/releases/tag/v1.0.0
