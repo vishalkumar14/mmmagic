@@ -54,6 +54,11 @@
         }],
         [ 'OS=="mac"', {
           'include_dirs': [ 'config/mac' ],
+          # Must match binding.gyp exactly. If the two disagree the linker
+          # emits a version-mismatch warning for every object file.
+          'xcode_settings': {
+            'MACOSX_DEPLOYMENT_TARGET': '11.0',
+          },
         }],
         [ 'OS=="freebsd"', {
           'include_dirs': [ 'config/freebsd' ],

@@ -313,8 +313,13 @@ Combine with `|`.
 | `MAGIC_NO_CHECK_CDF` | Skip CDF (legacy Office) detection |
 | `MAGIC_NO_CHECK_TOKENS` | Skip token detection |
 | `MAGIC_NO_CHECK_ENCODING` | Skip encoding detection |
+| `MAGIC_NO_CHECK_CSV` | Skip CSV detection — returns `text/plain`, as 1.x did |
+| `MAGIC_NO_CHECK_JSON` | Skip JSON detection — returns `text/plain`, as 1.x did |
+| `MAGIC_NO_CHECK_SIMH` | Skip SIMH tape detection |
 
-20 constants, unchanged from upstream.
+23 constants, unchanged from upstream. The last three arrived with libmagic
+5.48 in 2.0.0; the CSV and JSON ones are the supported way to keep the 1.x
+answer while you migrate.
 
 ---
 
@@ -330,7 +335,7 @@ Combine with `|`.
 | 20 | Works | verified by hand; EOL April 2026 — not in CI |
 | 18 | Works | verified by hand; EOL April 2025 — not in CI |
 | 16, 14 | Works via prebuilt binary only | EOL since 2023. **Not supported.** Building from source fails — `node-addon-api` needs Node 18+. |
-| ≤ 12 | Not supported | — |
+| ≤ 12 | Not supported | Node-API 8 exists from 12.22, so the binary can load — but the official `node:12` images ship glibc 2.24, below our floor. Untested and unsupported. |
 
 `engines.node` is `>=18.0.0`: the floor for the *guaranteed* path, since a
 platform with no matching prebuild must compile, and that needs Node 18+.
@@ -349,10 +354,10 @@ but they are past end-of-life, so we do not test them on every commit.
 | Linux arm64 (glibc) | **Confirmed** | built + full suite in Docker, Node 22/24/26 |
 | Linux x64/arm64 (musl / Alpine) | **Confirmed** | install + detection on `node:24-alpine`, `node:26-alpine` |
 | Windows x64 | **Confirmed** | built with MSVC on Windows 11, Node 16/18/20/22/24/26 |
-| Windows arm64 | **Not tested** | prebuild job exists (`continue-on-error`) |
-| Windows x86 (32-bit) | **Not tested** | prebuild job exists. Node only ships 32-bit Windows for **Node 22** — 24 and 26 dropped it |
+| Windows arm64 | **Builds, not run** | binary is produced and shipped; no arm64 Windows runner executes the suite (`continue-on-error`) |
+| Windows x86 (32-bit) | **Builds, not run** | binary is produced and shipped. Node only ships 32-bit Windows for **Node 22** — 24 and 26 dropped it, so Node 22 is the only runtime that can load it |
 | Linux ppc64le, s390x | **Not tested** | no prebuild; would build from source |
-| FreeBSD, OpenBSD, SunOS | **Not tested** | config headers are vendored but unexercised for years |
+| FreeBSD, OpenBSD, SunOS | **Not tested** | config headers are vendored and were carried forward for libmagic 5.48 on a best-effort basis — no runner exists for them, so a mistake shows up as a failed source build |
 
 ### What does *not* exist
 
@@ -364,15 +369,30 @@ Worth stating because it gets asked for:
 | 32-bit Linux | Node stopped shipping it after Node 10 |
 | 32-bit ARM Linux (armv7l) | Node 22 only; dropped in 24 and 26 |
 
-### Linux glibc floor
+### Minimum OS versions
 
-The Linux glibc binaries need **no symbol newer than `GLIBC_2.28`**, covering
-Debian 10+, Ubuntu 18.04+, RHEL 8+, and Amazon Linux 2023. CI fails the build if
-that floor rises.
+A prebuilt binary is tied to the OS it was built against, not to your Node
+version. When the OS is too old the binary will not load, and the install falls
+back to a source build — which surfaces as "needs a compiler" and never
+mentions the real reason. These are the actual floors:
 
-This matters: a binary built on a newer distro silently refuses to load on older
-ones, and the fallback is a source build — so it surfaces as "needs a compiler"
-and never mentions glibc.
+| Platform | Minimum | Covers |
+|---|---|---|
+| **Linux glibc** | **glibc 2.28** | Debian 10+, Ubuntu 18.10+, RHEL 8+, Amazon Linux 2023 |
+| **Linux musl** | **Alpine 3.19+** | earlier Alpine lacks the `libstdc++` this binary needs |
+| **macOS** | **11.0 Big Sur** | every Apple Silicon Mac, and Intel Macs from 2020 |
+| **Windows** | Windows 10+ | x64, arm64 and 32-bit x86 |
+
+CI fails the Linux build if the glibc floor rises above 2.28.
+
+The macOS floor is pinned explicitly in `binding.gyp`. Left unset it inherits
+the build machine's SDK — which produced binaries requiring macOS 13.5 in
+2.0.0 and earlier, excluding Monterey and Big Sur for no good reason.
+
+**Node itself is rarely the limit.** The addon is Node-API 8, which exists from
+Node 12.22 / 14.17 / 16.0 onward, so the same binary loads on all of them. Node
+12 fails on the official `node:12-slim` image because that image is Debian 9
+(glibc 2.24), not because of anything to do with Node.
 
 ---
 
@@ -514,13 +534,14 @@ use is safe. The addon is context-aware and works inside `worker_threads`.
 ## Testing
 
 ```bash
-npm test              # all suites (35 assertions)
+npm test              # all suites (38 assertions)
 
 npm run test:upstream   # original upstream suite
 npm run test:mime       # MIME coverage across all fixtures
 npm run test:promise    # promise/async-await + callback compatibility
 npm run test:largefile  # proves large files are not read into memory
 npm run test:worker     # worker_threads support
+npm run test:magiccheck # guards a local patch to the vendored libmagic
 npm run test:legacy     # 28 checks without node:test, for Node 14/16
 ```
 

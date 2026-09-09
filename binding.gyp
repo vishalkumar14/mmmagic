@@ -37,10 +37,17 @@
       'conditions': [
         ['OS=="mac"', {
           'xcode_settings': {
-            # MACOSX_DEPLOYMENT_TARGET is deliberately unset.
-            # Setting it on this target only left deps/libmagic on node-gyp's
-            # default and produced a link-time version-mismatch warning per
-            # object file.
+            # Pin the deployment target rather than inheriting the build
+            # machine's default. Left unset, the shipped binary took the CI
+            # runner's SDK -- macos-14 produced minos 13.5, which refuses to
+            # load on Monterey or Big Sur for no reason we actually need.
+            #
+            # 11.0 is the right floor: it is the first release supporting
+            # Apple Silicon, so no arm64 Mac is excluded, and it reaches Intel
+            # Macs back to 2020. It is also set on deps/libmagic's target --
+            # setting it on only one is what produced the link-time
+            # version-mismatch warning per object file noted here before.
+            'MACOSX_DEPLOYMENT_TARGET': '11.0',
             #
             # node-addon-api requires C++17; Node 24+ V8 headers require C++20.
             # gnu++20 satisfies both. This must never be lowered.
