@@ -334,32 +334,13 @@
 /* #undef size_t */
 
 
-#ifndef HAVE_UINT8_T
-typedef unsigned char uint8_t;
-#endif
-#ifndef HAVE_UINT16_T
-typedef unsigned short uint16_t;
-#endif
-#ifndef HAVE_UINT32_T
-typedef unsigned int uint32_t;
-#endif
-#ifndef HAVE_INT32_T
-typedef int int32_t;
-#endif
-#ifndef HAVE_UINT64_T
-#if SIZEOF_LONG_LONG == 8
-typedef unsigned long long uint64_t;
-#else
-typedef unsigned long uint64_t;
-#endif
-#endif
-#ifndef HAVE_INT64_T
-#if SIZEOF_LONG_LONG == 8
-typedef long long int64_t;
-#else
-typedef long int64_t;
-#endif
-#endif
+/* The pre-C99 fallback typedefs for uint8_t..int64_t that used to live here
+   are gone, matching what 5.48's own configure emits for linux and mac.
+   autoconf 2.70+ dropped the HAVE_U?INT*_T probes because <stdint.h> is
+   assumed, so the gates those typedefs depended on no longer exist -- leaving
+   the block behind would have made it fire unconditionally, and with
+   SIZEOF_LONG_LONG also gone the 64-bit branch would have picked `long`,
+   silently narrowing uint64_t to 32 bits on i386 and armv7. */
 
 /* Define as `fork' if `vfork' does not work. */
 /* #undef vfork */
