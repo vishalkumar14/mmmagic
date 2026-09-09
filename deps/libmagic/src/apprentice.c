@@ -1536,7 +1536,20 @@ apprentice_load(struct magic_set *ms, const char *fn, int action)
 	struct dirent *d;
 
 	memset(mset, 0, sizeof(mset));
-	ms->flags |= MAGIC_CHECK;	/* Enable checks for parsed files */
+	/* XXX: local change to vendored libmagic -- see test/test-magiccheck.js
+	 *
+	 * Upstream turns MAGIC_CHECK on here and never turns it off. For the
+	 * `file` command that is right: you asked it to read your magic file, so
+	 * you want to hear about mistakes in it. For a library loaded into
+	 * someone else's process it is not -- libmagic starts writing parse
+	 * warnings to the host's stderr, and funcs.c:768 promotes a regex that
+	 * fails to compile from a skipped entry to a hard error.
+	 *
+	 * Only reachable when a caller supplies their own magic file; the
+	 * bundled magic.mgc takes the mmap path and never enters this function.
+	 * Disabled since the original 0.5.5 import.
+	 */
+	/* ms->flags |= MAGIC_CHECK; */	/* Enable checks for parsed files */
 
 
 	if ((map = CAST(struct magic_map *, calloc(1, sizeof(*map)))) == NULL)
